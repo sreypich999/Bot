@@ -60,18 +60,107 @@ except Exception as e:
     model = None
 
 # -------------------------
-# User context - MULTI-USER SUPPORT
+# User context - MULTI-USER SUPPORT with ENHANCED MEMORY
 # -------------------------
 user_context = defaultdict(lambda: {
     "level": "beginner",
     "language": "English", 
     "last_topic": None,
     "history": [],
-    "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    "learning_goals": [],
+    "weak_areas": [],
+    "strengths": [],
+    "writing_projects": [],
+    "current_essay": None,
+    "grammar_issues": []
 })
 
-# IMPROVED SYSTEM PROMPT with better formatting instructions
+# COMPREHENSIVE SYSTEM PROMPT with ESSAY WRITING & SCRIPT CREATION
 SYSTEM_PROMPT = """
+You are an advanced, comprehensive language tutor for students learning English, Khmer, and French. 
+
+IMPORTANT FORMATTING RULES:
+- NEVER use markdown tables, code blocks, or complex formatting
+- Use clear, simple language with natural line breaks
+- For grammar explanations, use this format:
+  Tense: [Name]
+  Structure: [formula]
+  Use: [when to use it]
+  Example: [simple example]
+
+- For vocabulary: list items with clear definitions
+- For comparisons: use simple bullet points with • 
+- Keep responses concise but complete
+- Use natural paragraph breaks for readability
+- Focus on clear, conversational explanations
+
+COMPREHENSIVE ESSAY WRITING ASSISTANCE FOR ALL LEVELS:
+
+ENGLISH ESSAY WRITING:
+• Beginner: Simple sentences, basic structure (intro-body-conclusion)
+• Intermediate: Paragraph development, thesis statements, supporting evidence
+• Advanced: Complex arguments, academic style, sophisticated vocabulary
+• Essay Types: Narrative, Descriptive, Expository, Persuasive, Argumentative
+• Structure Help: Introduction hooks, thesis statements, topic sentences, conclusions
+• Editing: Grammar check, coherence, flow, vocabulary enhancement
+
+KHMER ESSAY WRITING (ការសរសេរ អត្ថបទ):
+• Beginner: ប្រយោគធម្មតា រចនាសម្ព័ន្ធមូលដ្ឋាន
+• Intermediate: ការអភិវឌ្ឍកថាខណ្ឌ សេចក្តីថ្លែងការណ៍អត្ថន័យ
+• Advanced: អំពើសំខាន់ៗ ស្ទីលសិក្សា វាក្យសព្ទចម្រុះ
+• ប្រភេទអត្ថបទ: រឿងរ៉ាវ, ពណ៌នា, ពន្យល់, បញ្ជៀស, វែកញែក
+
+FRENCH ESSAY WRITING (Rédaction):
+• Beginner: Phrases simples, structure basique
+• Intermediate: Développement de paragraphes, thèses, preuves
+• Advanced: Arguments complexes, style académique, vocabulaire sophistiqué
+• Types de dissertation: Narrative, Descriptive, Explicative, Persuasive, Argumentative
+
+SCRIPT WRITING & PRESENTATION ASSISTANCE:
+• Presentation Scripts: Formal, informal, academic, business
+• Speech Writing: Opening, body, conclusion, persuasive techniques
+• Dialogue Scripts: Conversations, interviews, role-plays
+• Story Scripts: Narrative structure, character development
+• All scripts available in English, Khmer, and French
+
+GRAMMAR CHECKING & CORRECTION:
+• Comprehensive grammar analysis
+• Error explanations with corrections
+• Style and tone improvements
+• Vocabulary enhancement suggestions
+• Sentence structure optimization
+
+VOCABULARY BUILDING FOR ALL SUBJECTS:
+• Academic vocabulary
+• Business terminology  
+• Technical terms
+• Everyday conversation
+• Subject-specific terminology
+
+CRITICAL MEMORY INSTRUCTIONS:
+- ALWAYS reference previous conversations and learning history
+- Remember the student's level, language preferences, and past topics
+- Build on previous lessons and exercises
+- Note progress and improvements from past sessions
+- Continue topics from where you left off
+- Track writing projects and provide continuous feedback
+- Remember grammar issues and help students overcome them
+
+SPECIALIZED ASSISTANCE FEATURES:
+1. ESSAY OUTLINING: Help create detailed outlines for any topic
+2. THESIS DEVELOPMENT: Craft strong thesis statements
+3. PARAGRAPH BUILDING: Develop coherent, well-structured paragraphs
+4. TRANSITION WORDS: Teach appropriate transition words for each language
+5. CONCLUSION WRITING: Create powerful, memorable conclusions
+6. PEER REVIEW: Provide constructive feedback on student writing
+7. PLAGIARISM CHECK: Help students express ideas in their own words
+8. CITATION HELP: Guide on proper citation formats
+9. BRAINSTORMING: Help generate ideas and arguments
+10. DRAFT REVIEW: Provide feedback on multiple drafts
+
+You assist with ALL aspects of language learning including grammar, translation, vocabulary, writing, pronunciation, conversation practice, essay writing, script creation, and presentation skills.
+
 You are an advanced, efficient language tutor for students learning English, Khmer, and French. 
 
 You are an advanced, efficient language tutor for students learning English, Khmer, and French. 
@@ -150,8 +239,8 @@ IMPORTANT FORMATTING RULES:
 - Focus on clear, conversational explanations
 
 You assist with grammar, translation, vocabulary, writing, pronunciation, and conversation practice. Keep responses friendly, engaging, and easy to read in plain text.
-
-Focus on being helpful, clear, and engaging. Provide practical language help that's easy to understand."""
+Focus on being extremely helpful, clear, and engaging. Provide practical, comprehensive language help that's easy to understand.
+"""
 
 # -------------------------
 # Formatting helpers
@@ -161,7 +250,7 @@ def choose_title_from_user_text(user_text: str) -> str:
     if "translate" in t:
         return "🌍 Translation"
     if any(w in t for w in ["fix", "correct", "grammar"]):
-        return "📝 Correction" 
+        return "📝 Grammar Check"
     if any(w in t for w in ["explain", "how", "why"]):
         return "💡 Explanation"
     if any(w in t for w in ["quiz", "exercise", "practice"]):
@@ -170,9 +259,15 @@ def choose_title_from_user_text(user_text: str) -> str:
         return "📚 Grammar Guide"
     if any(w in t for w in ["word", "vocab", "phrase"]):
         return "📖 Vocabulary"
+    if any(w in t for w in ["essay", "writing", "write", "composition"]):
+        return "✍️ Essay Writing"
+    if any(w in t for w in ["script", "presentation", "speech", "dialogue"]):
+        return "🎭 Script Writing"
+    if any(w in t for w in ["outline", "thesis", "paragraph"]):
+        return "📑 Writing Structure"
     if "hello" in t or "hi" in t or "start" in t:
         return "👋 Welcome"
-    return "💬 Answer"
+    return "💬 Language Help"
 
 def clean_and_format_text(raw_text: str) -> str:
     if not raw_text:
@@ -206,27 +301,107 @@ def make_user_friendly_html(raw_text: str, user_text: str) -> str:
     return final
 
 # -------------------------
+# ENHANCED MEMORY FUNCTIONS with WRITING SUPPORT
+# -------------------------
+def get_conversation_context(user_id: str, current_question: str) -> str:
+    """Get formatted conversation context for the AI with enhanced memory"""
+    if user_id not in user_context or len(user_context[user_id]["history"]) <= 1:
+        return "First interaction with this student"
+    
+    context_lines = []
+    
+    # Get last 4 exchanges for context (to avoid token limits)
+    recent_history = user_context[user_id]["history"][-8:]  # Last 4 Q&A pairs
+    
+    for exchange in recent_history:
+        if exchange.get('question'):
+            context_lines.append(f"Student: {exchange['question']}")
+        if exchange.get('response'):
+            # Keep full responses for better context
+            response = exchange['response']
+            context_lines.append(f"Tutor: {response}")
+    
+    return "\n".join(context_lines)
+
+def update_learning_profile(user_id: str, user_text: str, bot_response: str):
+    """Update user's learning profile based on conversation"""
+    lower_text = user_text.lower()
+    
+    # Detect learning goals
+    if any(word in lower_text for word in ["want to learn", "need to practice", "want to improve", "goal"]):
+        if "grammar" in lower_text and "grammar" not in user_context[user_id]["learning_goals"]:
+            user_context[user_id]["learning_goals"].append("grammar")
+        if "vocabulary" in lower_text and "vocabulary" not in user_context[user_id]["learning_goals"]:
+            user_context[user_id]["learning_goals"].append("vocabulary")
+        if any(word in lower_text for word in ["speak", "conversation", "pronunciation"]) and "speaking" not in user_context[user_id]["learning_goals"]:
+            user_context[user_id]["learning_goals"].append("speaking")
+        if any(word in lower_text for word in ["essay", "writing", "write"]) and "writing" not in user_context[user_id]["learning_goals"]:
+            user_context[user_id]["learning_goals"].append("writing")
+    
+    # Detect weak areas from questions
+    if any(word in lower_text for word in ["difficult", "hard", "struggle", "problem", "don't understand"]):
+        if "tense" in lower_text or "verb" in lower_text:
+            user_context[user_id]["weak_areas"].append("verb_tenses")
+        if "pronounce" in lower_text or "speaking" in lower_text:
+            user_context[user_id]["weak_areas"].append("pronunciation")
+        if "vocabulary" in lower_text or "word" in lower_text:
+            user_context[user_id]["weak_areas"].append("vocabulary")
+        if "essay" in lower_text or "writing" in lower_text:
+            user_context[user_id]["weak_areas"].append("essay_structure")
+    
+    # Track writing projects
+    if any(word in lower_text for word in ["essay", "writing project", "assignment"]):
+        project_match = re.search(r'(essay|writing|assignment) about (.*?)(?:\.|$)', lower_text)
+        if project_match:
+            topic = project_match.group(2)
+            if topic and topic not in user_context[user_id]["writing_projects"]:
+                user_context[user_id]["writing_projects"].append(topic)
+
+def detect_writing_request(user_text: str) -> dict:
+    """Detect what type of writing assistance is needed"""
+    text_lower = user_text.lower()
+    request_type = {
+        "is_essay": any(word in text_lower for word in ["essay", "composition", "redaction", "អត្ថបទ"]),
+        "is_script": any(word in text_lower for word in ["script", "presentation", "speech", "dialogue"]),
+        "is_grammar_check": any(word in text_lower for word in ["check grammar", "correct this", "fix my writing"]),
+        "is_outline": any(word in text_lower for word in ["outline", "structure", "plan"]),
+        "is_thesis": any(word in text_lower for word in ["thesis", "main idea", "argument"]),
+        "is_vocabulary": any(word in text_lower for word in ["vocabulary", "words for", "terms for"])
+    }
+    return request_type
+
+# -------------------------
 # Welcome message for new users
 # -------------------------
 WELCOME_MESSAGE = """
-<b>👋 Welcome to Language Tutor!</b>
+<b>👋 Welcome to Comprehensive Language Tutor!</b>
 
-I'm here to help you learn English, Khmer, and French. I can help with:
+I'm here to help you master English, Khmer, and French with complete writing support:
 
-• 📝 Grammar corrections
-• 🌍 Translations  
-• 📚 Grammar explanations
-• 📖 Vocabulary building
-• 🎯 Practice exercises
-• 💡 Language tips
+• 📝 <b>Grammar Checking</b> - Comprehensive error analysis and corrections
+• ✍️ <b>Essay Writing</b> - All levels & types in English, Khmer, French
+• 🎭 <b>Script Writing</b> - Presentations, speeches, dialogues
+• 📑 <b>Writing Structure</b> - Outlines, thesis, paragraphs, conclusions
+• 🌍 <b>Translations</b> - Accurate translations between all languages
+• 📚 <b>Grammar Explanations</b> - Detailed rules with examples
+• 📖 <b>Vocabulary Building</b> - Academic, business, technical terms
+• 🎯 <b>Practice Exercises</b> - Quizzes, writing prompts, drills
+• 💡 <b>Study Techniques</b> - Effective learning strategies
 
-Just send me a message in any language and I'll help you!
+<u>Try these commands:</u>
+• "Help me write an essay about climate change"
+• "Check grammar in this paragraph: [your text]"
+• "Create a presentation script about education"
+• "Give me vocabulary for business meetings"
+• "Outline an essay about social media"
+• "Help with Khmer essay: [your topic]"
+• "Create a French dialogue for restaurants"
 
-<em>Try asking: "Can you help me with English tenses?" or "Translate 'hello' to Khmer"</em>
+Just send me your writing or request, and I'll provide comprehensive assistance!
 """
 
 # -------------------------
-# Telegram Handlers - MULTI-USER READY
+# Telegram Handlers - MULTI-USER READY WITH COMPREHENSIVE WRITING SUPPORT
 # -------------------------
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
@@ -267,7 +442,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "language": "English", 
             "last_topic": None,
             "history": [],
-            "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "learning_goals": [],
+            "weak_areas": [],
+            "strengths": [],
+            "writing_projects": [],
+            "current_essay": None,
+            "grammar_issues": []
         }
         user_context[user_id]["history"].append({
             "question": user_text, 
@@ -277,8 +458,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         return
     elif is_greeting and not is_new_user:
-        # Quick hello for existing users
-        await update.message.reply_text("👋 Hello again! How can I help you with your language learning today?", parse_mode="HTML")
+        # Quick hello for existing users with memory recall
+        memory_recall = ""
+        if user_context[user_id]["history"]:
+            last_topic = user_context[user_id]["last_topic"]
+            if last_topic:
+                memory_recall = f" Last time we discussed {last_topic}."
+        
+        await update.message.reply_text(f"👋 Hello again {username}!{memory_recall} How can I help you with your language learning today?", parse_mode="HTML")
         return
 
     # Initialize user context if not exists (for new users who don't send greetings)
@@ -288,7 +475,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "language": "English", 
             "last_topic": None,
             "history": [],
-            "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "learning_goals": [],
+            "weak_areas": [],
+            "strengths": [],
+            "writing_projects": [],
+            "current_essay": None,
+            "grammar_issues": []
         }
 
     # Update user context
@@ -307,29 +500,72 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "english" in lower:
         user_context[user_id]["language"] = "English"
 
-    # Update history (keep last 10 messages)
-    user_context[user_id]["last_topic"] = user_text[:50]
-    if len(user_context[user_id]["history"]) >= 10:
+    # Detect writing request type
+    writing_request = detect_writing_request(user_text)
+    
+    # Update history (keep last 15 messages for better memory)
+    user_context[user_id]["last_topic"] = user_text[:100]
+    if len(user_context[user_id]["history"]) >= 15:
         user_context[user_id]["history"].pop(0)
     
+    # Add current question to history
     user_context[user_id]["history"].append({
         "question": user_text, 
         "timestamp": datetime.now().strftime("%H:%M:%S"),
-        "username": username
+        "username": username,
+        "writing_request": writing_request
     })
 
-    # Build personalized prompt
-    history_summary = "\n".join(
-        [f"- {e['username']}: {e['question']}" for e in user_context[user_id]["history"][:-1]]
-    )
+    # Build ENHANCED personalized prompt with memory and writing support
+    conversation_history = get_conversation_context(user_id, user_text)
+    
+    # Build learning profile summary
+    learning_profile = ""
+    if user_context[user_id]["learning_goals"]:
+        learning_profile += f"Learning goals: {', '.join(user_context[user_id]['learning_goals'])}. "
+    if user_context[user_id]["weak_areas"]:
+        learning_profile += f"Areas needing practice: {', '.join(user_context[user_id]['weak_areas'])}. "
+    if user_context[user_id]["strengths"]:
+        learning_profile += f"Strengths: {', '.join(user_context[user_id]['strengths'])}. "
+    if user_context[user_id]["writing_projects"]:
+        learning_profile += f"Writing projects: {', '.join(user_context[user_id]['writing_projects'])}. "
+
+    # Add writing-specific instructions
+    writing_instructions = ""
+    if writing_request["is_essay"]:
+        writing_instructions = "PROVIDE COMPREHENSIVE ESSAY ASSISTANCE: Include structure guidance, thesis help, paragraph development, and language tips appropriate for the student's level."
+    elif writing_request["is_script"]:
+        writing_instructions = "CREATE ENGAGING SCRIPTS: Provide well-structured scripts for presentations, speeches, or dialogues with natural language flow and appropriate formatting."
+    elif writing_request["is_grammar_check"]:
+        writing_instructions = "PROVIDE DETAILED GRAMMAR FEEDBACK: Identify errors, explain corrections, and suggest improvements for style and clarity."
+    elif writing_request["is_outline"]:
+        writing_instructions = "CREATE DETAILED OUTLINES: Provide clear, organized essay outlines with main points, subpoints, and logical flow."
+    elif writing_request["is_thesis"]:
+        writing_instructions = "HELP DEVELOP STRONG THESIS STATEMENTS: Guide in creating clear, arguable, and focused thesis statements."
+    elif writing_request["is_vocabulary"]:
+        writing_instructions = "PROVIDE RELEVANT VOCABULARY: Offer subject-specific terms with definitions and usage examples."
 
     personalized_prompt = f"""
-You are a helpful language tutor. Please help with this request.
+{SYSTEM_PROMPT}
 
-Student: {username}
-Current question: {user_text}
+STUDENT PROFILE:
+- Name: {username}
+- Level: {user_context[user_id]['level']}
+- Learning: {user_context[user_id]['language']}
+- Recent topic: {user_context[user_id]['last_topic']}
+- {learning_profile}
 
-Please provide a helpful, clear response:
+WRITING REQUEST TYPE: {writing_request}
+{writing_instructions}
+
+CONVERSATION HISTORY:
+{conversation_history}
+
+CURRENT REQUEST from {username}: {user_text}
+
+CRITICAL: Reference our previous conversation and build on what we've discussed. Provide comprehensive, level-appropriate assistance that continues the learning journey.
+
+Provide detailed, practical help:
 """
 
     # Generate response
@@ -361,8 +597,11 @@ Please provide a helpful, clear response:
         raw_reply = "I encountered an issue while processing your request. Please try again with a different question!"
         log_info(f"Error generating response for {username}: {e}", user_id)
 
-    # Update history with response
-    user_context[user_id]["history"][-1]["response"] = raw_reply[:100] + "..." if len(raw_reply) > 100 else raw_reply
+    # Update history with FULL response for better memory
+    user_context[user_id]["history"][-1]["response"] = raw_reply
+    
+    # Update learning profile based on this interaction
+    update_learning_profile(user_id, user_text, raw_reply)
 
     # Send response
     reply_html = make_user_friendly_html(raw_reply, user_text)
@@ -403,7 +642,7 @@ async def health_check():
 # -------------------------
 async def main_async():
     """Async main function with health monitoring"""
-    log_info("🚀 Starting Language Tutor Bot...", "SYSTEM")
+    log_info("🚀 Starting Comprehensive Language Tutor Bot...", "SYSTEM")
     
     # Wait to ensure any previous instance is stopped
     await asyncio.sleep(10)
@@ -470,7 +709,7 @@ async def main_async():
 
 def main():
     """Main function that ensures bot runs forever"""
-    log_info("🎯 Starting Forever-Running Language Tutor Bot...", "SYSTEM")
+    log_info("🎯 Starting Forever-Running Comprehensive Language Tutor Bot...", "SYSTEM")
     
     while True:
         try:
@@ -494,6 +733,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
