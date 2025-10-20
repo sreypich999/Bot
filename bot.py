@@ -8,28 +8,49 @@ import nest_asyncio
 from collections import defaultdict
 import asyncio
 from dotenv import load_dotenv
+from aiohttp import web
 
 # Load environment variables from .env file (for local testing)
 load_dotenv()
 
+# Custom logging formatter to handle missing user_id
+class CustomFormatter(logging.Formatter):
+    def format(self, record):
+        if not hasattr(record, 'user_id'):
+            record.user_id = 'N/A'
+        return super().format(record)
+
 # Configure logging
 logging.basicConfig(
-    filename="bot_interactions.log",
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - User %(user_id)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - User %(user_id)s - %(message)s",
+    handlers=[
+        logging.FileHandler("bot_interactions.log"),
+        logging.StreamHandler()
+    ]
 )
+logger = logging.getLogger()
+for handler in logger.handlers:
+    handler.setFormatter(CustomFormatter(handler.formatter.format))
 
 # Use environment variables
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# Dynamically construct webhook URL using Render's hostname
+RENDER_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+WEBHOOK_URL = f"https://{RENDER_HOSTNAME}/webhook" if RENDER_HOSTNAME else os.getenv("WEBHOOK_URL")
 
-# Log environment variable status
-if not GEMINI_API_KEY or not TELEGRAM_TOKEN:
-    logging.error("Missing environment variables: GEMINI_API_KEY or TELEGRAM_TOKEN not set")
+# Validate environment variables
+if not all([GEMINI_API_KEY, TELEGRAM_TOKEN]):
+    logging.error("Missing environment variables: GEMINI_API_KEY or TELEGRAM_TOKEN")
+    raise ValueError("Missing required environment variables")
+if not WEBHOOK_URL and not RENDER_HOSTNAME:
+    logging.error("WEBHOOK_URL or RENDER_EXTERNAL_HOSTNAME must be set for webhook mode")
+    raise ValueError("Missing WEBHOOK_URL or RENDER_EXTERNAL_HOSTNAME")
 
 # Configure Gemini API
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 # In-memory user context and history storage (max 5 previous interactions per user)
 user_context = defaultdict(lambda: {
@@ -140,13 +161,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(reply)
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.error(f"Update {update} caused error: {context.error}", extra={"user_id": update.effective_user.id if update else 'N/A'})
+
+async def webhook_handler(request):
+    app = request.app['telegram_app']
+    update = Update.de_json(await request.json(), app.bot)
+    await app.process_update(update)
+    return web.Response()
+
 def main():
     nest_asyncio.apply()  # Apply nest_asyncio for certain environments
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("Bot started…")
-    app.run_polling()
+    app.add_error_handler(error_handler)
+
+    # Set up aiohttp server for webhook
+    web_app = web.Application()
+    web_app['telegram_app'] = app
+    web_app.router.add_post('/webhook', webhook_handler)
+
+    # Start webhook
+    async def start_webhook():
+        await app.bot.set_webhook(url=WEBHOOK_URL)
+        logging.info(f"Webhook set to {WEBHOOK_URL}", extra={"user_id": "N/A"})
+        runner = web.AppRunner(web_app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', 8080)
+        await site.start()
+        print("Bot started with webhook…")
+        await asyncio.Event().wait()  # Keep running
+
+    asyncio.run(start_webhook())
 
 if __name__ == "__main__":
     main()
-
