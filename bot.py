@@ -31,7 +31,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger()
 for handler in logger.handlers:
-    handler.setFormatter(CustomFormatter(handler.formatter.format))
+    # Use the existing format string (_fmt) instead of the format method
+    handler.setFormatter(CustomFormatter(handler.formatter._fmt if handler.formatter else "%(asctime)s - %(levelname)s - User %(user_id)s - %(message)s"))
 
 # Use environment variables
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
