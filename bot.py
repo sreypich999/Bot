@@ -1,4 +1,3 @@
-# bot_polling.py
 import os
 import logging
 import asyncio
@@ -8,46 +7,35 @@ from dotenv import load_dotenv
 import html
 import re
 
-# If you ever run in a notebook / interactive environment, nest_asyncio helps.
-# It's harmless on normal servers, but optional.
-try:
-    import nest_asyncio
-    nest_asyncio.apply()
-except Exception:
-    pass
-
-# Third-party SDK (keep if you use Gemini)
-import google.generativeai as genai
-
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
-
-# load .env locally (Render uses environment vars in dashboard)
+# Load environment variables
 load_dotenv()
 
 # -------------------------
-# Logging (safe: inject default user_id)
+# Fixed Logging Configuration
 # -------------------------
+
 class ContextFilter(logging.Filter):
-    """Ensure every LogRecord has a `user_id` attribute so formatting never fails."""
+    """Ensure every LogRecord has a `user_id` attribute."""
     def filter(self, record):
         if not hasattr(record, "user_id"):
             record.user_id = "N/A"
         return True
 
+# Set up logging properly
+logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - User %(user_id)s - %(message)s",
-    handlers=[logging.StreamHandler()],
+    datefmt="%Y-%m-%d %H:%M:%S"
 )
-root_logger = logging.getLogger()
-root_logger.addFilter(ContextFilter())
-logger = logging.getLogger(__name__)
+
+# Add filter to all handlers
+for handler in logging.getLogger().handlers:
+    handler.addFilter(ContextFilter())
 
 def log_info(msg, user_id="N/A"):
-    """Helper to log with a user_id in the `extra` field (overrides default)."""
+    """Helper to log with a user_id."""
     logger.info(msg, extra={"user_id": user_id})
-
 
 # -------------------------
 # Environment / API keys
@@ -55,14 +43,18 @@ def log_info(msg, user_id="N/A"):
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    log_info("Missing GEMINI_API_KEY or TELEGRAM_TOKEN in environment", "N/A")
-    raise SystemExit("Missing GEMINI_API_KEY or TELEGRAM_TOKEN")
+if not TELEGRAM_TOKEN:
+    log_info("Missing TELEGRAM_TOKEN in environment", "N/A")
+    raise SystemExit("Missing TELEGRAM_TOKEN")
 
-# Configure Gemini (if using)
+if not GEMINI_API_KEY:
+    log_info("Missing GEMINI_API_KEY in environment", "N/A")
+    raise SystemExit("Missing GEMINI_API_KEY")
+
+# Configure Gemini
+import google.generativeai as genai
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
-
+model = genai.GenerativeModel("gemini-2.0-flash")  # Using a more stable model
 
 # -------------------------
 # Simple in-memory user context
@@ -118,10 +110,8 @@ You are an advanced, efficient language tutor for students learning English, Khm
 
 Make learning fast, fun, and continuous, using past questions to personalize and engage each user!
 """   
-
-
 # -------------------------
-# Formatting helpers for friendly user replies (HTML for Telegram)
+# Formatting helpers
 # -------------------------
 def choose_title_from_user_text(user_text: str) -> str:
     """Return a short title based on heuristics from the user's message."""
@@ -137,21 +127,13 @@ def choose_title_from_user_text(user_text: str) -> str:
     return "Answer"
 
 def make_user_friendly_html(raw_text: str, user_text: str) -> str:
-    """
-    Convert raw model output into an HTML-formatted Telegram-safe reply.
-    - Adds a bold title determined by the user's input
-    - Escapes HTML in the body
-    - Splits into short paragraphs for readability
-    """
+    """Convert raw model output into HTML-formatted Telegram-safe reply."""
     title = choose_title_from_user_text(user_text)
     if not raw_text:
         body = "Sorry — I couldn't create a response."
     else:
-        # Normalize whitespace
         s = " ".join(raw_text.split())
-        # Split into sentence-like pieces using punctuation
         sentences = re.split(r'(?<=[.?!])\s+', s)
-        # Group into ~2-sentence paragraphs
         paragraphs = []
         for i in range(0, len(sentences), 2):
             para = " ".join(sentences[i:i+2]).strip()
@@ -159,28 +141,27 @@ def make_user_friendly_html(raw_text: str, user_text: str) -> str:
                 paragraphs.append(para)
         if not paragraphs:
             paragraphs = [s]
-
-        # Escape each paragraph for HTML safety
         escaped_paragraphs = [html.escape(p) for p in paragraphs]
         body = "\n\n".join(escaped_paragraphs)
 
     final = f"<b>{html.escape(title)}</b>\n\n{body}"
-    return final[:3900]  # safe truncate (Telegram limit margin)
-
+    return final[:3900]
 
 # -------------------------
 # Handler
 # -------------------------
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
     user_text = update.message.text
     user_id = str(update.message.from_user.id)
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_info(f"Input: {user_text}", user_id)
 
-    # Update context (simple heuristics)
+    # Update context
     lower = user_text.lower()
     if "beginner" in lower:
         user_context[user_id]["level"] = "beginner"
@@ -199,7 +180,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_context[user_id]["last_topic"] = user_text[:50]
     if len(user_context[user_id]["history"]) >= 5:
         user_context[user_id]["history"].pop(0)
-    user_context[user_id]["history"].append({"question": user_text, "timestamp": timestamp})
+    user_context[user_id]["history"].append({"question": user_text, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
 
     history_summary = "\n".join(
         [f"Q (at {e['timestamp']}): {e['question']}" for e in user_context[user_id]["history"][:-1]]
@@ -211,41 +192,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Previous Questions:\n{history_summary if history_summary else 'None'}\n\nUser: {user_text}"
     )
 
-    # Call Gemini in a thread to avoid blocking the event loop too long
     try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # fallback to get_event_loop (should not usually happen because handler runs under the app's loop)
-        loop = asyncio.get_event_loop()
-
-    try:
-        response = await loop.run_in_executor(
+        # Use async execution for better performance
+        response = await asyncio.get_event_loop().run_in_executor(
             None,
-            lambda: model.generate_content([{"role": "user", "parts": [{"text": personalized_prompt}]}])
+            lambda: model.generate_content(personalized_prompt)
         )
-        raw_reply = getattr(response, "text", str(response))
+        raw_reply = response.text if hasattr(response, 'text') else str(response)
         user_context[user_id]["history"][-1]["response"] = raw_reply
         log_info("Generated reply from Gemini", user_id)
     except Exception as e:
-        raw_reply = f"Sorry, something went wrong while generating content: {e}"
+        raw_reply = f"Sorry, I encountered an error while processing your request. Please try again."
         user_context[user_id]["history"][-1]["response"] = raw_reply
-        logger.exception("Error while generating content", exc_info=e, extra={"user_id": user_id})
+        logger.error(f"Gemini API error: {e}", extra={"user_id": user_id})
 
     reply_html = make_user_friendly_html(raw_reply, user_text)
-    await update.message.reply_text(reply_html[:4000], parse_mode="HTML")
-
+    await update.message.reply_text(reply_html, parse_mode="HTML")
 
 # -------------------------
 # Error handler
 # -------------------------
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    uid = getattr(update, "effective_user", None)
-    uid = uid.id if uid else "N/A"
-    logger.error("Update caused error", exc_info=context.error, extra={"user_id": uid})
-
+    uid = "N/A"
+    if update and hasattr(update, 'effective_user') and update.effective_user:
+        uid = update.effective_user.id
+    logger.error(f"Update caused error: {context.error}", exc_info=context.error, extra={"user_id": uid})
 
 # -------------------------
-# Main
+# Main - FIXED for Render
 # -------------------------
 def main():
     # Build application
@@ -253,35 +227,22 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
 
-    # Ensure an event loop exists and is set for the main thread (fixes Python 3.12 behavior)
+    log_info("Starting bot with polling...", "N/A")
+    
     try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop -> create and set one
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    # If the loop is closed for some reason, recreate it
-    if loop.is_closed():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    # Remove any webhook that could conflict with polling (drop old updates)
-    try:
-        loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
-        log_info("Deleted existing webhook (if present).", "N/A")
+        # CRITICAL FIX: Use a single instance with proper cleanup
+        app.run_polling(
+            drop_pending_updates=True, 
+            timeout=30, 
+            poll_interval=3,  # Increased interval to reduce conflicts
+            close_loop=False   # Important for proper cleanup
+        )
     except Exception as e:
-        log_info(f"No webhook removed or error while deleting webhook: {e}", "N/A")
-
-    log_info("Starting bot with polling (drop_pending_updates=True).", "N/A")
-
-    try:
-        # Blocking call that starts the bot's internal loop
-        app.run_polling(drop_pending_updates=True, timeout=20, poll_interval=1)
-    except Exception as e:
-        logger.exception("Polling stopped due to an exception", exc_info=e, extra={"user_id": "N/A"})
+        logger.error(f"Polling stopped: {e}", extra={"user_id": "N/A"})
+        # Don't immediately restart to avoid conflict loops
+        import time
+        time.sleep(10)
         raise
-
 
 if __name__ == "__main__":
     main()
