@@ -846,7 +846,7 @@ def health_check():
             log_info(f"🤖 Health Check: {active_users} active users, {total_messages} messages, {total_files} files", "SYSTEM")
             
             # Keep alive - log every 30 minutes
-            time.sleep(1800)  # 30 minutes
+            time.sleep(18000)  # 30 minutes
             
         except Exception as e:
             log_info(f"Health check error: {e}", "SYSTEM")
@@ -880,7 +880,7 @@ def main():
             # Start polling
             application.run_polling(
                 poll_interval=5.0,
-                timeout=30,
+                timeout=70,
                 drop_pending_updates=True
             )
             
@@ -894,3 +894,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
