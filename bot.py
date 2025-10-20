@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
-from openai import OpenAI
+import google.generativeai as genai
 import nest_asyncio
 from collections import defaultdict
 import asyncio
@@ -27,10 +27,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not GEMINI_API_KEY or not TELEGRAM_TOKEN:
     logging.error("Missing environment variables: GEMINI_API_KEY or TELEGRAM_TOKEN not set")
 
-client = OpenAI(
-    api_key=GEMINI_API_KEY,
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-)
+# Configure Gemini API
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 # In-memory user context and history storage (max 5 previous interactions per user)
 user_context = defaultdict(lambda: {
@@ -126,15 +125,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response = await asyncio.get_event_loop().run_in_executor(
             None,
-            lambda: client.chat.completions.create(
-                model="gemini-2.5-flash",
-                messages=[
-                    {"role": "system", "content": personalized_prompt},
-                    {"role": "user", "content": user_text}
-                ]
+            lambda: model.generate_content(
+                [{"role": "user", "parts": [{"text": personalized_prompt + "\n\nUser: " + user_text}]}]
             )
         )
-        reply = response.choices[0].message.content
+        reply = response.text
         # Add response to history
         user_context[user_id]["history"][-1]["response"] = reply
         logging.info(f"Response: {reply}", extra={"user_id": user_id})
