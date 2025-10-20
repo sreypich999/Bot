@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import time
 from datetime import datetime
 from collections import defaultdict
 from dotenv import load_dotenv
@@ -52,9 +53,13 @@ if not GEMINI_API_KEY:
     raise SystemExit("Missing GEMINI_API_KEY")
 
 # Configure Gemini
-import google.generativeai as genai
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.0-flash")  # Using a more stable model
+try:
+    import google.generativeai as genai
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-2.0-flash")
+except Exception as e:
+    log_info(f"Gemini configuration failed: {e}", "N/A")
+    model = None
 
 # -------------------------
 # Simple in-memory user context
@@ -110,6 +115,7 @@ You are an advanced, efficient language tutor for students learning English, Khm
 
 Make learning fast, fun, and continuous, using past questions to personalize and engage each user!
 """   
+
 # -------------------------
 # Formatting helpers
 # -------------------------
@@ -192,6 +198,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Previous Questions:\n{history_summary if history_summary else 'None'}\n\nUser: {user_text}"
     )
 
+    if not model:
+        reply_html = "<b>Error</b>\n\nSorry, the AI service is currently unavailable. Please try again later."
+        await update.message.reply_text(reply_html, parse_mode="HTML")
+        return
+
     try:
         # Use async execution for better performance
         response = await asyncio.get_event_loop().run_in_executor(
@@ -219,29 +230,88 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update caused error: {context.error}", exc_info=context.error, extra={"user_id": uid})
 
 # -------------------------
-# Main - FIXED for Render
+# Webhook cleanup and conflict resolution
 # -------------------------
-def main():
+async def cleanup_webhooks(bot):
+    """Clean up any existing webhooks to prevent conflicts"""
+    try:
+        # Get current webhook info
+        webhook_info = await bot.get_webhook_info()
+        if webhook_info.url:
+            log_info(f"Found existing webhook: {webhook_info.url}", "N/A")
+            # Delete the webhook
+            await bot.delete_webhook(drop_pending_updates=True)
+            log_info("Successfully deleted webhook", "N/A")
+            # Wait a bit for the cleanup to propagate
+            await asyncio.sleep(2)
+        else:
+            log_info("No existing webhook found", "N/A")
+    except Exception as e:
+        log_info(f"Error during webhook cleanup: {e}", "N/A")
+
+# -------------------------
+# Main - UPDATED with better conflict resolution
+# -------------------------
+async def main_async():
+    """Main function as async to properly handle cleanup"""
     # Build application
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
 
-    log_info("Starting bot with polling...", "N/A")
+    log_info("Starting bot initialization...", "N/A")
     
     try:
-        # CRITICAL FIX: Use a single instance with proper cleanup
-        app.run_polling(
-            drop_pending_updates=True, 
-            timeout=30, 
-            poll_interval=3,  # Increased interval to reduce conflicts
-            close_loop=False   # Important for proper cleanup
+        # Clean up any existing webhooks first
+        await cleanup_webhooks(app.bot)
+        
+        # Additional wait to ensure any previous instances are fully stopped
+        log_info("Waiting for previous instances to stop...", "N/A")
+        await asyncio.sleep(5)
+        
+        # Start polling with specific parameters to avoid conflicts
+        log_info("Starting polling...", "N/A")
+        
+        # Use the updater directly for more control
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(
+            poll_interval=5.0,  # Increased interval
+            timeout=30,
+            drop_pending_updates=True,
+            allowed_updates=None
         )
+        
+        log_info("Bot is now running and polling for updates", "N/A")
+        
+        # Keep the bot running
+        while True:
+            await asyncio.sleep(3600)  # Sleep for 1 hour
+            
     except Exception as e:
-        logger.error(f"Polling stopped: {e}", extra={"user_id": "N/A"})
-        # Don't immediately restart to avoid conflict loops
-        import time
-        time.sleep(10)
+        logger.error(f"Bot stopped due to error: {e}", extra={"user_id": "N/A"})
+        raise
+    finally:
+        # Proper cleanup
+        try:
+            if app.updater.running:
+                await app.updater.stop()
+            await app.stop()
+            await app.shutdown()
+        except Exception as e:
+            log_info(f"Cleanup error: {e}", "N/A")
+
+def main():
+    """Synchronous main function for compatibility"""
+    # Run the async main function
+    try:
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        log_info("Bot stopped by user", "N/A")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", extra={"user_id": "N/A"})
+        # Don't immediately restart to avoid rapid crash loops
+        time.sleep(30)
         raise
 
 if __name__ == "__main__":
