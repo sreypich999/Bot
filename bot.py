@@ -484,10 +484,11 @@ Just send me your files or requests, and I'll provide comprehensive assistance!
 """
 
 # -------------------------
-# Telegram Handlers - WITH FILE UPLOAD SUPPORT (python-telegram-bot==21.4)
+# Telegram Handlers - WITH FILE UPLOAD SUPPORT (updated imports)
 # -------------------------
-from telegram import Update, Message, Document, PhotoSize
-from telegram.ext import Updater, MessageHandler, Filters, CallbackContext
+from telegram import Update
+from telegram.ext import Application, MessageHandler, CallbackContext
+from telegram.ext import filters
 import nest_asyncio
 
 # Apply nest_asyncio to allow nested event loops
@@ -797,38 +798,29 @@ async def process_photo_message(update: Update, context: CallbackContext, user_i
             parse_mode="HTML"
         )
 
-def handle_text_message(update: Update, context: CallbackContext):
+async def handle_text_message(update: Update, context: CallbackContext):
     """Handle text messages"""
     user_text = update.message.text
     user_id = str(update.message.from_user.id)
     username = update.message.from_user.first_name or "Student"
     
-    # Run async function in event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(process_text_message(update, context, user_text, user_id, username))
+    await process_text_message(update, context, user_text, user_id, username)
 
-def handle_document_message(update: Update, context: CallbackContext):
+async def handle_document_message(update: Update, context: CallbackContext):
     """Handle document uploads"""
     user_id = str(update.message.from_user.id)
     username = update.message.from_user.first_name or "Student"
     
-    # Run async function in event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(process_document_message(update, context, user_id, username))
+    await process_document_message(update, context, user_id, username)
 
-def handle_photo_message(update: Update, context: CallbackContext):
+async def handle_photo_message(update: Update, context: CallbackContext):
     """Handle photo uploads"""
     user_id = str(update.message.from_user.id)
     username = update.message.from_user.first_name or "Student"
     
-    # Run async function in event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(process_photo_message(update, context, user_id, username))
+    await process_photo_message(update, context, user_id, username)
 
-def error_handler(update: Update, context: CallbackContext):
+async def error_handler(update: Update, context: CallbackContext):
     """Handle errors"""
     uid = "N/A"
     if update and update.effective_user:
@@ -861,7 +853,7 @@ def health_check():
             time.sleep(300)  # 5 minutes on error
 
 # -------------------------
-# ROBUST MAIN FUNCTION - ALWAYS RUNNING (python-telegram-bot==21.4 compatible)
+# ROBUST MAIN FUNCTION - ALWAYS RUNNING (updated for python-telegram-bot v20+)
 # -------------------------
 def main():
     """Main function that ensures bot runs forever"""
@@ -874,20 +866,19 @@ def main():
     
     while True:
         try:
-            # Build updater with polling
-            updater = Updater(TELEGRAM_TOKEN, use_context=True)
-            dispatcher = updater.dispatcher
+            # Build application
+            application = Application.builder().token(TELEGRAM_TOKEN).build()
             
             # Add handlers for text, documents, and photos
-            dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text_message))
-            dispatcher.add_handler(MessageHandler(Filters.document, handle_document_message))
-            dispatcher.add_handler(MessageHandler(Filters.photo, handle_photo_message))
-            dispatcher.add_error_handler(error_handler)
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+            application.add_handler(MessageHandler(filters.Document.ALL, handle_document_message))
+            application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
+            application.add_error_handler(error_handler)
             
             log_info("🔄 Starting polling...", "SYSTEM")
             
             # Start polling
-            updater.start_polling(
+            application.run_polling(
                 poll_interval=5.0,
                 timeout=30,
                 drop_pending_updates=True
@@ -896,9 +887,6 @@ def main():
             log_info("✅ Bot is now running with file upload support!", "SYSTEM")
             log_info("💬 Users can now send text messages, PDFs, and images", "SYSTEM")
             
-            # Keep the bot running forever
-            updater.idle()
-            
         except Exception as e:
             logger.error(f"❌ Bot crashed: {e}", extra={"user_id": "SYSTEM"})
             log_info("🔄 Restarting bot in 30 seconds...", "SYSTEM")
@@ -906,4 +894,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
