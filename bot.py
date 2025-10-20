@@ -1,13 +1,14 @@
-
 import os
 import logging
 import asyncio
 import time
+import tempfile
 from datetime import datetime
 from collections import defaultdict
 from dotenv import load_dotenv
 import html
 import re
+import base64
 
 # Load environment variables
 load_dotenv()
@@ -53,11 +54,14 @@ if not GEMINI_API_KEY:
 try:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.0-flash")
-    log_info("Gemini configured successfully", "N/A")
+    # Use a model that supports vision (like Gemini 1.5 Flash or Pro)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    vision_model = genai.GenerativeModel("gemini-1.5-flash")
+    log_info("Gemini configured successfully with vision support", "N/A")
 except Exception as e:
     log_info(f"Gemini configuration failed: {e}", "N/A")
     model = None
+    vision_model = None
 
 # -------------------------
 # User context - MULTI-USER SUPPORT with ENHANCED MEMORY
@@ -73,10 +77,11 @@ user_context = defaultdict(lambda: {
     "strengths": [],
     "writing_projects": [],
     "current_essay": None,
-    "grammar_issues": []
+    "grammar_issues": [],
+    "uploaded_documents": []
 })
 
-# COMPREHENSIVE SYSTEM PROMPT with ESSAY WRITING & SCRIPT CREATION
+# COMPREHENSIVE SYSTEM PROMPT with FILE UPLOAD SUPPORT
 SYSTEM_PROMPT = """
 You are an advanced, comprehensive language tutor for students learning English, Khmer, and French. 
 
@@ -94,6 +99,39 @@ IMPORTANT FORMATTING RULES:
 - Keep responses concise but complete
 - Use natural paragraph breaks for readability
 - Focus on clear, conversational explanations
+
+COMPREHENSIVE FILE UPLOAD SUPPORT:
+
+DOCUMENT ANALYSIS (PDF, Images):
+• Homework Assignments: Explain requirements, help understand questions
+• Quiz/Test Papers: Analyze questions, provide guidance on answering
+• Study Materials: Summarize content, explain concepts
+• Writing Samples: Provide feedback on essays, compositions
+• Grammar Exercises: Check answers, explain corrections
+• Reading Comprehension: Help understand passages, answer questions
+• Presentation Slides: Analyze content, suggest improvements
+• Research Papers: Help understand academic content
+
+IMAGE ANALYSIS (JPG, PNG):
+• Screenshots of questions: Read and explain what's being asked
+• Handwritten notes: Transcribe and provide feedback
+• Textbook pages: Explain content and concepts
+• Quiz screenshots: Help understand questions and find answers
+• Diagram explanations: Describe and explain visual content
+• Worksheet images: Help complete assignments
+• Whiteboard photos: Transcribe and explain content
+
+SPECIFIC STUDENT USE CASES:
+1. "What does this document want me to do?" - Explain instructions
+2. "Help me understand this question" - Break down complex questions
+3. "Is my answer correct?" - Check work and provide feedback
+4. "Explain this concept from my notes" - Clarify study materials
+5. "Help me complete this worksheet" - Guide through exercises
+6. "What's the answer to this quiz question?" - Provide hints and explanations
+7. "Translate this document" - Provide translations with explanations
+8. "Summarize this text" - Create concise summaries
+9. "Check my grammar in this writing" - Provide detailed corrections
+10. "Explain this diagram/formula" - Break down visual information
 
 COMPREHENSIVE ESSAY WRITING ASSISTANCE FOR ALL LEVELS:
 
@@ -146,6 +184,7 @@ CRITICAL MEMORY INSTRUCTIONS:
 - Continue topics from where you left off
 - Track writing projects and provide continuous feedback
 - Remember grammar issues and help students overcome them
+- Remember uploaded documents and refer back to them
 
 SPECIALIZED ASSISTANCE FEATURES:
 1. ESSAY OUTLINING: Help create detailed outlines for any topic
@@ -158,28 +197,12 @@ SPECIALIZED ASSISTANCE FEATURES:
 8. CITATION HELP: Guide on proper citation formats
 9. BRAINSTORMING: Help generate ideas and arguments
 10. DRAFT REVIEW: Provide feedback on multiple drafts
+11. DOCUMENT ANALYSIS: Explain uploaded files and help with tasks
+12. IMAGE UNDERSTANDING: Read and explain images, screenshots, photos
+13. HOMEWORK HELP: Assist with assignments from uploaded files
+14. QUIZ ASSISTANCE: Help understand and answer quiz questions
 
-You assist with ALL aspects of language learning including grammar, translation, vocabulary, writing, pronunciation, conversation practice, essay writing, script creation, and presentation skills.
-
-You are an advanced, efficient language tutor for students learning English, Khmer, and French. 
-
-You are an advanced, efficient language tutor for students learning English, Khmer, and French. 
-
-IMPORTANT FORMATTING RULES:
-- NEVER use markdown tables, code blocks, or complex formatting
-- Use clear, simple language with natural line breaks
-- For grammar explanations, use this format:
-  Tense: [Name]
-  Structure: [formula]
-  Use: [when to use it]
-  Example: [simple example]
-
-- For vocabulary: list items with clear definitions
-- For comparisons: use simple bullet points with • 
-- Keep responses concise but complete
-- Use natural paragraph breaks for readability
-- Focus on clear, conversational explanations
-
+You assist with ALL aspects of language learning including grammar, translation, vocabulary, writing, pronunciation, conversation practice, essay writing, script creation, presentation skills, AND document/image analysis.
 You assist with grammar, translation, vocabulary, writing, pronunciation, and conversation practice. Keep responses friendly, engaging, and easy to read in plain text.
 You are an advanced, efficient language tutor for students learning English, Khmer, and French, designed to handle multiple users concurrently with fast, concise, and personalized responses. Your goal is to empower students of all ages and levels (beginner, intermediate, advanced) to master these languages through interactive, practical, and engaging learning. You cater to visual, auditory, and kinesthetic learners, using previous questions to provide context-aware responses. You assist with:
 
@@ -237,15 +260,16 @@ IMPORTANT FORMATTING RULES:
 - Keep responses concise but complete
 - Use natural paragraph breaks for readability
 - Focus on clear, conversational explanations
-
-You assist with grammar, translation, vocabulary, writing, pronunciation, and conversation practice. Keep responses friendly, engaging, and easy to read in plain text.
 Focus on being extremely helpful, clear, and engaging. Provide practical, comprehensive language help that's easy to understand.
 """
 
 # -------------------------
 # Formatting helpers
 # -------------------------
-def choose_title_from_user_text(user_text: str) -> str:
+def choose_title_from_user_text(user_text: str, is_file: bool = False) -> str:
+    if is_file:
+        return "📄 Document Analysis"
+    
     t = user_text.lower()
     if "translate" in t:
         return "🌍 Translation"
@@ -265,6 +289,8 @@ def choose_title_from_user_text(user_text: str) -> str:
         return "🎭 Script Writing"
     if any(w in t for w in ["outline", "thesis", "paragraph"]):
         return "📑 Writing Structure"
+    if any(w in t for w in ["document", "file", "upload", "image", "photo", "screenshot"]):
+        return "📄 File Analysis"
     if "hello" in t or "hi" in t or "start" in t:
         return "👋 Welcome"
     return "💬 Language Help"
@@ -281,8 +307,8 @@ def clean_and_format_text(raw_text: str) -> str:
     
     return cleaned.strip()
 
-def make_user_friendly_html(raw_text: str, user_text: str) -> str:
-    title = choose_title_from_user_text(user_text)
+def make_user_friendly_html(raw_text: str, user_text: str, is_file: bool = False) -> str:
+    title = choose_title_from_user_text(user_text, is_file)
     body = clean_and_format_text(raw_text)
     
     paragraphs = [p.strip() for p in body.split('\n\n') if p.strip()]
@@ -301,7 +327,67 @@ def make_user_friendly_html(raw_text: str, user_text: str) -> str:
     return final
 
 # -------------------------
-# ENHANCED MEMORY FUNCTIONS with WRITING SUPPORT
+# FILE PROCESSING FUNCTIONS
+# -------------------------
+async def process_uploaded_file(file_path: str, file_type: str, user_message: str = "", user_context: dict = None) -> str:
+    """Process uploaded files (PDF, images) using Gemini vision"""
+    try:
+        if not vision_model:
+            return "I'm sorry, but file analysis is currently unavailable. Please try again later."
+        
+        # Read the file
+        with open(file_path, 'rb') as file:
+            file_data = file.read()
+        
+        # Create prompt based on file type and user message
+        if user_message:
+            prompt = f"""
+            Please analyze this {file_type} file and help the student with their request: "{user_message}"
+            
+            Provide comprehensive assistance including:
+            - Explaining what the document is about
+            - Breaking down instructions or questions
+            - Providing answers or guidance for exercises
+            - Explaining concepts shown in the file
+            - Offering step-by-step help if needed
+            
+            Be detailed and helpful in your analysis.
+            """
+        else:
+            prompt = f"""
+            Please analyze this {file_type} file and help the student understand:
+            - What type of document this is
+            - What the main content or purpose is
+            - Any specific instructions or questions that need addressing
+            - Key concepts or information presented
+            - How you can help them with this material
+            
+            Provide a comprehensive analysis and offer specific help.
+            """
+        
+        # Generate content with the file
+        if file_type in ['jpg', 'jpeg', 'png', 'image']:
+            file_part = {
+                'mime_type': f'image/{file_type}' if file_type != 'jpg' else 'image/jpeg',
+                'data': file_data
+            }
+        elif file_type == 'pdf':
+            file_part = {
+                'mime_type': 'application/pdf',
+                'data': file_data
+            }
+        else:
+            return f"I'm sorry, I cannot process {file_type} files yet. Please try with PDF, JPG, or PNG files."
+        
+        response = vision_model.generate_content([prompt, file_part])
+        return response.text if hasattr(response, 'text') else "I couldn't analyze this file properly. Please try again."
+        
+    except Exception as e:
+        log_info(f"Error processing file: {e}", "FILE_PROCESSING")
+        return f"I encountered an error while processing your file: {str(e)}. Please try again with a different file or format."
+
+# -------------------------
+# ENHANCED MEMORY FUNCTIONS with FILE SUPPORT
 # -------------------------
 def get_conversation_context(user_id: str, current_question: str) -> str:
     """Get formatted conversation context for the AI with enhanced memory"""
@@ -323,7 +409,7 @@ def get_conversation_context(user_id: str, current_question: str) -> str:
     
     return "\n".join(context_lines)
 
-def update_learning_profile(user_id: str, user_text: str, bot_response: str):
+def update_learning_profile(user_id: str, user_text: str, bot_response: str, file_uploaded: bool = False):
     """Update user's learning profile based on conversation"""
     lower_text = user_text.lower()
     
@@ -338,24 +424,12 @@ def update_learning_profile(user_id: str, user_text: str, bot_response: str):
         if any(word in lower_text for word in ["essay", "writing", "write"]) and "writing" not in user_context[user_id]["learning_goals"]:
             user_context[user_id]["learning_goals"].append("writing")
     
-    # Detect weak areas from questions
-    if any(word in lower_text for word in ["difficult", "hard", "struggle", "problem", "don't understand"]):
-        if "tense" in lower_text or "verb" in lower_text:
-            user_context[user_id]["weak_areas"].append("verb_tenses")
-        if "pronounce" in lower_text or "speaking" in lower_text:
-            user_context[user_id]["weak_areas"].append("pronunciation")
-        if "vocabulary" in lower_text or "word" in lower_text:
-            user_context[user_id]["weak_areas"].append("vocabulary")
-        if "essay" in lower_text or "writing" in lower_text:
-            user_context[user_id]["weak_areas"].append("essay_structure")
-    
-    # Track writing projects
-    if any(word in lower_text for word in ["essay", "writing project", "assignment"]):
-        project_match = re.search(r'(essay|writing|assignment) about (.*?)(?:\.|$)', lower_text)
-        if project_match:
-            topic = project_match.group(2)
-            if topic and topic not in user_context[user_id]["writing_projects"]:
-                user_context[user_id]["writing_projects"].append(topic)
+    # Track file uploads
+    if file_uploaded:
+        user_context[user_id]["uploaded_documents"].append({
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "description": user_text[:100] if user_text else "File upload"
+        })
 
 def detect_writing_request(user_text: str) -> dict:
     """Detect what type of writing assistance is needed"""
@@ -366,7 +440,8 @@ def detect_writing_request(user_text: str) -> dict:
         "is_grammar_check": any(word in text_lower for word in ["check grammar", "correct this", "fix my writing"]),
         "is_outline": any(word in text_lower for word in ["outline", "structure", "plan"]),
         "is_thesis": any(word in text_lower for word in ["thesis", "main idea", "argument"]),
-        "is_vocabulary": any(word in text_lower for word in ["vocabulary", "words for", "terms for"])
+        "is_vocabulary": any(word in text_lower for word in ["vocabulary", "words for", "terms for"]),
+        "is_file_analysis": any(word in text_lower for word in ["document", "file", "upload", "image", "photo", "screenshot", "pdf", "jpg", "png"])
     }
     return request_type
 
@@ -376,46 +451,67 @@ def detect_writing_request(user_text: str) -> dict:
 WELCOME_MESSAGE = """
 <b>👋 Welcome to Comprehensive Language Tutor!</b>
 
-I'm here to help you master English, Khmer, and French with complete writing support:
+I'm here to help you master English, Khmer, and French with complete writing AND file upload support:
 
-• 📝 <b>Grammar Checking</b> - Comprehensive error analysis and corrections
-• ✍️ <b>Essay Writing</b> - All levels & types in English, Khmer, French
-• 🎭 <b>Script Writing</b> - Presentations, speeches, dialogues
-• 📑 <b>Writing Structure</b> - Outlines, thesis, paragraphs, conclusions
-• 🌍 <b>Translations</b> - Accurate translations between all languages
-• 📚 <b>Grammar Explanations</b> - Detailed rules with examples
-• 📖 <b>Vocabulary Building</b> - Academic, business, technical terms
-• 🎯 <b>Practice Exercises</b> - Quizzes, writing prompts, drills
-• 💡 <b>Study Techniques</b> - Effective learning strategies
+<u>📁 FILE UPLOAD SUPPORT:</u>
+• <b>PDF Documents</b> - Homework, quizzes, assignments, study materials
+• <b>Images/Screenshots</b> - Questions, notes, textbook pages, worksheets
+• <b>Document Analysis</b> - Explain what documents want you to do
+• <b>Quiz Help</b> - Understand questions and find answers
+• <b>Homework Assistance</b> - Help complete assignments from files
+
+<u>✍️ WRITING SUPPORT:</u>
+• <b>Essay Writing</b> - All levels & types in English, Khmer, French
+• <b>Grammar Checking</b> - Comprehensive error analysis and corrections
+• <b>Script Writing</b> - Presentations, speeches, dialogues
+• <b>Writing Structure</b> - Outlines, thesis, paragraphs, conclusions
+
+<u>🌍 LANGUAGE SUPPORT:</u>
+• <b>Translations</b> - Accurate translations between all languages
+• <b>Vocabulary Building</b> - Academic, business, technical terms
+• <b>Practice Exercises</b> - Quizzes, writing prompts, drills
 
 <u>Try these commands:</u>
-• "Help me write an essay about climate change"
+• Upload a PDF and ask "What does this assignment want me to do?"
+• Send a screenshot and ask "Help me answer these quiz questions"
+• "Help me write an essay about climate change in French"
 • "Check grammar in this paragraph: [your text]"
-• "Create a presentation script about education"
-• "Give me vocabulary for business meetings"
-• "Outline an essay about social media"
-• "Help with Khmer essay: [your topic]"
-• "Create a French dialogue for restaurants"
+• Upload a worksheet image and ask "Help me complete this exercise"
+• "Create a presentation script about education reform"
 
-Just send me your writing or request, and I'll provide comprehensive assistance!
+Just send me your files or requests, and I'll provide comprehensive assistance!
 """
 
 # -------------------------
-# Telegram Handlers - MULTI-USER READY WITH COMPREHENSIVE WRITING SUPPORT
+# Telegram Handlers - WITH FILE UPLOAD SUPPORT
 # -------------------------
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from telegram import Document, PhotoSize
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
+    if not update.message:
         return
 
-    user_text = update.message.text
     user_id = str(update.message.from_user.id)
     username = update.message.from_user.first_name or "Student"
     
-    log_info(f"Message from {username}: {user_text}", user_id)
+    # Handle text messages
+    if update.message.text:
+        user_text = update.message.text
+        log_info(f"Message from {username}: {user_text}", user_id)
+        await process_text_message(update, context, user_text, user_id, username)
+    
+    # Handle document uploads (PDF, etc.)
+    elif update.message.document:
+        await process_document_message(update, context, user_id, username)
+    
+    # Handle photo uploads
+    elif update.message.photo:
+        await process_photo_message(update, context, user_id, username)
 
+async def process_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str, user_id: str, username: str):
+    """Process regular text messages"""
     # Send typing action to show bot is working
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
@@ -448,7 +544,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "strengths": [],
             "writing_projects": [],
             "current_essay": None,
-            "grammar_issues": []
+            "grammar_issues": [],
+            "uploaded_documents": []
         }
         user_context[user_id]["history"].append({
             "question": user_text, 
@@ -481,7 +578,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "strengths": [],
             "writing_projects": [],
             "current_essay": None,
-            "grammar_issues": []
+            "grammar_issues": [],
+            "uploaded_documents": []
         }
 
     # Update user context
@@ -529,6 +627,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         learning_profile += f"Strengths: {', '.join(user_context[user_id]['strengths'])}. "
     if user_context[user_id]["writing_projects"]:
         learning_profile += f"Writing projects: {', '.join(user_context[user_id]['writing_projects'])}. "
+    if user_context[user_id]["uploaded_documents"]:
+        learning_profile += f"Recently uploaded documents: {len(user_context[user_id]['uploaded_documents'])} files. "
 
     # Add writing-specific instructions
     writing_instructions = ""
@@ -544,6 +644,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         writing_instructions = "HELP DEVELOP STRONG THESIS STATEMENTS: Guide in creating clear, arguable, and focused thesis statements."
     elif writing_request["is_vocabulary"]:
         writing_instructions = "PROVIDE RELEVANT VOCABULARY: Offer subject-specific terms with definitions and usage examples."
+    elif writing_request["is_file_analysis"]:
+        writing_instructions = "PROVIDE FILE ANALYSIS GUIDANCE: Explain how to upload files for analysis and what types of help are available."
 
     personalized_prompt = f"""
 {SYSTEM_PROMPT}
@@ -607,6 +709,111 @@ Provide detailed, practical help:
     reply_html = make_user_friendly_html(raw_reply, user_text)
     await update.message.reply_text(reply_html, parse_mode="HTML")
 
+async def process_document_message(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, username: str):
+    """Process document uploads (PDF, etc.)"""
+    try:
+        document = update.message.document
+        file_name = document.file_name
+        file_extension = file_name.split('.')[-1].lower() if file_name else "unknown"
+        
+        log_info(f"Document upload from {username}: {file_name}", user_id)
+        
+        # Check if file type is supported
+        supported_types = ['pdf', 'jpg', 'jpeg', 'png']
+        if file_extension not in supported_types:
+            await update.message.reply_text(
+                f"❌ <b>Unsupported File Type</b>\n\n"
+                f"I can only process: PDF, JPG, PNG files.\n"
+                f"Your file: {file_name}\n"
+                f"Please convert your file to a supported format and try again.",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Send processing message
+        processing_msg = await update.message.reply_text(
+            f"📄 <b>Processing your {file_extension.upper()} file...</b>\n\n"
+            f"<i>Analyzing: {file_name}</i>\n"
+            f"This may take a few moments...",
+            parse_mode="HTML"
+        )
+        
+        # Download the file
+        file = await document.get_file()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}') as temp_file:
+            temp_path = temp_file.name
+            await file.download_to_drive(temp_path)
+        
+        # Get user's caption/message
+        user_message = update.message.caption or "Can you help me understand this document?"
+        
+        # Process the file
+        analysis_result = await process_uploaded_file(temp_path, file_extension, user_message, user_context.get(user_id))
+        
+        # Clean up temporary file
+        os.unlink(temp_path)
+        
+        # Update user context with file upload
+        update_learning_profile(user_id, f"Uploaded {file_name}: {user_message}", analysis_result, file_uploaded=True)
+        
+        # Send the analysis result
+        reply_html = make_user_friendly_html(analysis_result, f"Document: {file_name}", is_file=True)
+        await processing_msg.edit_text(reply_html, parse_mode="HTML")
+        
+    except Exception as e:
+        log_info(f"Error processing document: {e}", user_id)
+        await update.message.reply_text(
+            "❌ <b>Error Processing File</b>\n\n"
+            "I encountered an error while processing your file. Please try again with a different file or format.",
+            parse_mode="HTML"
+        )
+
+async def process_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, username: str):
+    """Process photo uploads (images)"""
+    try:
+        # Get the highest quality photo
+        photo = update.message.photo[-1]
+        
+        log_info(f"Photo upload from {username}", user_id)
+        
+        # Send processing message
+        processing_msg = await update.message.reply_text(
+            "🖼️ <b>Processing your image...</b>\n\n"
+            "<i>Analyzing the content...</i>\n"
+            "This may take a few moments...",
+            parse_mode="HTML"
+        )
+        
+        # Download the photo
+        file = await photo.get_file()
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
+            temp_path = temp_file.name
+            await file.download_to_drive(temp_path)
+        
+        # Get user's caption/message
+        user_message = update.message.caption or "Can you help me understand this image?"
+        
+        # Process the image
+        analysis_result = await process_uploaded_file(temp_path, "jpg", user_message, user_context.get(user_id))
+        
+        # Clean up temporary file
+        os.unlink(temp_path)
+        
+        # Update user context with file upload
+        update_learning_profile(user_id, f"Uploaded image: {user_message}", analysis_result, file_uploaded=True)
+        
+        # Send the analysis result
+        reply_html = make_user_friendly_html(analysis_result, "Image analysis", is_file=True)
+        await processing_msg.edit_text(reply_html, parse_mode="HTML)
+        
+    except Exception as e:
+        log_info(f"Error processing photo: {e}", user_id)
+        await update.message.reply_text(
+            "❌ <b>Error Processing Image</b>\n\n"
+            "I encountered an error while processing your image. Please try again with a different image.",
+            parse_mode="HTML"
+        )
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     uid = "N/A"
     if update and hasattr(update, 'effective_user') and update.effective_user:
@@ -627,8 +834,9 @@ async def health_check():
         try:
             active_users = len(user_context)
             total_messages = sum(len(user["history"]) for user in user_context.values())
+            total_files = sum(len(user["uploaded_documents"]) for user in user_context.values())
             
-            log_info(f"🤖 Health Check: {active_users} active users, {total_messages} total messages", "SYSTEM")
+            log_info(f"🤖 Health Check: {active_users} active users, {total_messages} messages, {total_files} files", "SYSTEM")
             
             # Keep alive - log every 30 minutes
             await asyncio.sleep(1800)  # 30 minutes
@@ -642,7 +850,7 @@ async def health_check():
 # -------------------------
 async def main_async():
     """Async main function with health monitoring"""
-    log_info("🚀 Starting Comprehensive Language Tutor Bot...", "SYSTEM")
+    log_info("🚀 Starting Comprehensive Language Tutor Bot with File Support...", "SYSTEM")
     
     # Wait to ensure any previous instance is stopped
     await asyncio.sleep(10)
@@ -655,8 +863,10 @@ async def main_async():
             # Build application
             app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
             
-            # Add handlers
+            # Add handlers for text, documents, and photos
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+            app.add_handler(MessageHandler(filters.Document.ALL, handle_message))
+            app.add_handler(MessageHandler(filters.PHOTO, handle_message))
             app.add_error_handler(error_handler)
             
             log_info(f"🔄 Starting polling (attempt {retry_count + 1}/{max_retries})...", "SYSTEM")
@@ -674,8 +884,8 @@ async def main_async():
                 allowed_updates=None
             )
             
-            log_info("✅ Bot is now running and ready for multiple users!", "SYSTEM")
-            log_info("💬 Users can now start chatting with the bot", "SYSTEM")
+            log_info("✅ Bot is now running with file upload support!", "SYSTEM")
+            log_info("💬 Users can now send text messages, PDFs, and images", "SYSTEM")
             
             # Keep the bot running forever
             while True:
@@ -733,5 +943,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
