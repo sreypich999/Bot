@@ -54,7 +54,7 @@ if not GEMINI_API_KEY:
 try:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
-    # Use a model that supports vision (like Gemini 1.5 Flash or Pro)
+    # Use a model that supports vision
     model = genai.GenerativeModel("gemini-1.5-flash")
     vision_model = genai.GenerativeModel("gemini-1.5-flash")
     log_info("Gemini configured successfully with vision support", "N/A")
@@ -202,6 +202,7 @@ SPECIALIZED ASSISTANCE FEATURES:
 13. HOMEWORK HELP: Assist with assignments from uploaded files
 14. QUIZ ASSISTANCE: Help understand and answer quiz questions
 
+You assist with ALL aspects of language learning including grammar, translation, vocabulary, writing, pronunciation, conversation practice, essay writing, script creation, presentation skills, AND document/image analysis.
 You assist with ALL aspects of language learning including grammar, translation, vocabulary, writing, pronunciation, conversation practice, essay writing, script creation, presentation skills, AND document/image analysis.
 You assist with grammar, translation, vocabulary, writing, pronunciation, and conversation practice. Keep responses friendly, engaging, and easy to read in plain text.
 You are an advanced, efficient language tutor for students learning English, Khmer, and French, designed to handle multiple users concurrently with fast, concise, and personalized responses. Your goal is to empower students of all ages and levels (beginner, intermediate, advanced) to master these languages through interactive, practical, and engaging learning. You cater to visual, auditory, and kinesthetic learners, using previous questions to provide context-aware responses. You assist with:
@@ -483,34 +484,16 @@ Just send me your files or requests, and I'll provide comprehensive assistance!
 """
 
 # -------------------------
-# Telegram Handlers - WITH FILE UPLOAD SUPPORT
+# Telegram Handlers - WITH FILE UPLOAD SUPPORT (python-telegram-bot==21.4)
 # -------------------------
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
-from telegram import Document, PhotoSize
+from telegram import Update, Message, Document, PhotoSize
+from telegram.ext import Updater, MessageHandler, Filters, CallbackContext
+import nest_asyncio
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
+# Apply nest_asyncio to allow nested event loops
+nest_asyncio.apply()
 
-    user_id = str(update.message.from_user.id)
-    username = update.message.from_user.first_name or "Student"
-    
-    # Handle text messages
-    if update.message.text:
-        user_text = update.message.text
-        log_info(f"Message from {username}: {user_text}", user_id)
-        await process_text_message(update, context, user_text, user_id, username)
-    
-    # Handle document uploads (PDF, etc.)
-    elif update.message.document:
-        await process_document_message(update, context, user_id, username)
-    
-    # Handle photo uploads
-    elif update.message.photo:
-        await process_photo_message(update, context, user_id, username)
-
-async def process_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str, user_id: str, username: str):
+async def process_text_message(update: Update, context: CallbackContext, user_text: str, user_id: str, username: str):
     """Process regular text messages"""
     # Send typing action to show bot is working
     try:
@@ -709,7 +692,7 @@ Provide detailed, practical help:
     reply_html = make_user_friendly_html(raw_reply, user_text)
     await update.message.reply_text(reply_html, parse_mode="HTML")
 
-async def process_document_message(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, username: str):
+async def process_document_message(update: Update, context: CallbackContext, user_id: str, username: str):
     """Process document uploads (PDF, etc.)"""
     try:
         document = update.message.document
@@ -768,7 +751,7 @@ async def process_document_message(update: Update, context: ContextTypes.DEFAULT
             parse_mode="HTML"
         )
 
-async def process_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, username: str):
+async def process_photo_message(update: Update, context: CallbackContext, user_id: str, username: str):
     """Process photo uploads (images)"""
     try:
         # Get the highest quality photo
@@ -804,7 +787,7 @@ async def process_photo_message(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Send the analysis result
         reply_html = make_user_friendly_html(analysis_result, "Image analysis", is_file=True)
-        await processing_msg.edit_text(reply_html, parse_mode="HTML)
+        await processing_msg.edit_text(reply_html, parse_mode="HTML")
         
     except Exception as e:
         log_info(f"Error processing photo: {e}", user_id)
@@ -814,9 +797,41 @@ async def process_photo_message(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="HTML"
         )
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+def handle_text_message(update: Update, context: CallbackContext):
+    """Handle text messages"""
+    user_text = update.message.text
+    user_id = str(update.message.from_user.id)
+    username = update.message.from_user.first_name or "Student"
+    
+    # Run async function in event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(process_text_message(update, context, user_text, user_id, username))
+
+def handle_document_message(update: Update, context: CallbackContext):
+    """Handle document uploads"""
+    user_id = str(update.message.from_user.id)
+    username = update.message.from_user.first_name or "Student"
+    
+    # Run async function in event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(process_document_message(update, context, user_id, username))
+
+def handle_photo_message(update: Update, context: CallbackContext):
+    """Handle photo uploads"""
+    user_id = str(update.message.from_user.id)
+    username = update.message.from_user.first_name or "Student"
+    
+    # Run async function in event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(process_photo_message(update, context, user_id, username))
+
+def error_handler(update: Update, context: CallbackContext):
+    """Handle errors"""
     uid = "N/A"
-    if update and hasattr(update, 'effective_user') and update.effective_user:
+    if update and update.effective_user:
         uid = update.effective_user.id
     
     error_msg = str(context.error) if context.error else "Unknown error"
@@ -828,7 +843,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 # -------------------------
 # BOT HEALTH MONITORING
 # -------------------------
-async def health_check():
+def health_check():
     """Periodic health check to ensure bot is running"""
     while True:
         try:
@@ -839,105 +854,53 @@ async def health_check():
             log_info(f"🤖 Health Check: {active_users} active users, {total_messages} messages, {total_files} files", "SYSTEM")
             
             # Keep alive - log every 30 minutes
-            await asyncio.sleep(1800)  # 30 minutes
+            time.sleep(1800)  # 30 minutes
             
         except Exception as e:
             log_info(f"Health check error: {e}", "SYSTEM")
-            await asyncio.sleep(300)  # 5 minutes on error
+            time.sleep(300)  # 5 minutes on error
 
 # -------------------------
-# ROBUST MAIN FUNCTION - ALWAYS RUNNING
+# ROBUST MAIN FUNCTION - ALWAYS RUNNING (python-telegram-bot==21.4 compatible)
 # -------------------------
-async def main_async():
-    """Async main function with health monitoring"""
+def main():
+    """Main function that ensures bot runs forever"""
     log_info("🚀 Starting Comprehensive Language Tutor Bot with File Support...", "SYSTEM")
     
-    # Wait to ensure any previous instance is stopped
-    await asyncio.sleep(10)
+    # Start health monitoring in background thread
+    import threading
+    health_thread = threading.Thread(target=health_check, daemon=True)
+    health_thread.start()
     
-    retry_count = 0
-    max_retries = 5
-    
-    while retry_count < max_retries:
+    while True:
         try:
-            # Build application
-            app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+            # Build updater with polling
+            updater = Updater(TELEGRAM_TOKEN, use_context=True)
+            dispatcher = updater.dispatcher
             
             # Add handlers for text, documents, and photos
-            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-            app.add_handler(MessageHandler(filters.Document.ALL, handle_message))
-            app.add_handler(MessageHandler(filters.PHOTO, handle_message))
-            app.add_error_handler(error_handler)
+            dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text_message))
+            dispatcher.add_handler(MessageHandler(Filters.document, handle_document_message))
+            dispatcher.add_handler(MessageHandler(Filters.photo, handle_photo_message))
+            dispatcher.add_error_handler(error_handler)
             
-            log_info(f"🔄 Starting polling (attempt {retry_count + 1}/{max_retries})...", "SYSTEM")
-            
-            # Start health monitoring in background
-            health_task = asyncio.create_task(health_check())
+            log_info("🔄 Starting polling...", "SYSTEM")
             
             # Start polling
-            await app.initialize()
-            await app.start()
-            await app.updater.start_polling(
+            updater.start_polling(
                 poll_interval=5.0,
                 timeout=30,
-                drop_pending_updates=True,
-                allowed_updates=None
+                drop_pending_updates=True
             )
             
             log_info("✅ Bot is now running with file upload support!", "SYSTEM")
             log_info("💬 Users can now send text messages, PDFs, and images", "SYSTEM")
             
             # Keep the bot running forever
-            while True:
-                await asyncio.sleep(3600)  # Sleep for 1 hour
-                
+            updater.idle()
+            
         except Exception as e:
-            retry_count += 1
-            error_msg = str(e)
-            
-            # Cleanup on error
-            try:
-                if 'app' in locals():
-                    await app.updater.stop()
-                    await app.stop()
-                    await app.shutdown()
-            except:
-                pass
-            
-            if "Conflict" in error_msg:
-                log_info(f"⚡ Conflict detected, waiting before retry {retry_count}...", "SYSTEM")
-                await asyncio.sleep(20 * retry_count)  # Exponential backoff
-            else:
-                logger.error(f"❌ Unexpected error: {error_msg}", extra={"user_id": "SYSTEM"})
-                await asyncio.sleep(10)
-                
-            if retry_count >= max_retries:
-                logger.error(f"💥 Max retries reached. Bot cannot start.", extra={"user_id": "SYSTEM"})
-                return False
-    
-    return True
-
-def main():
-    """Main function that ensures bot runs forever"""
-    log_info("🎯 Starting Forever-Running Comprehensive Language Tutor Bot...", "SYSTEM")
-    
-    while True:
-        try:
-            # Run the async main function
-            success = asyncio.run(main_async())
-            
-            if not success:
-                log_info("🔁 Restarting bot in 30 seconds...", "SYSTEM")
-                time.sleep(30)
-            else:
-                log_info("🔄 Bot stopped normally, restarting in 10 seconds...", "SYSTEM")
-                time.sleep(10)
-                
-        except KeyboardInterrupt:
-            log_info("⏹️ Bot stopped by user", "SYSTEM")
-            break
-        except Exception as e:
-            logger.error(f"💥 Critical error: {e}", extra={"user_id": "SYSTEM"})
+            logger.error(f"❌ Bot crashed: {e}", extra={"user_id": "SYSTEM"})
             log_info("🔄 Restarting bot in 30 seconds...", "SYSTEM")
             time.sleep(30)
 
