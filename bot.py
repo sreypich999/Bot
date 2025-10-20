@@ -1,43 +1,63 @@
 # bot_polling.py
 import os
 import logging
+import asyncio
 from datetime import datetime
 from collections import defaultdict
-import asyncio
 from dotenv import load_dotenv
+import html
 
+# Third-party SDK (keep if you use Gemini)
 import google.generativeai as genai
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
-# load .env locally (Render uses environment vars set in dashboard)
+# load .env locally (Render uses environment vars in dashboard)
 load_dotenv()
 
-# --- Logging ---
+# -------------------------
+# Logging (safe: inject default user_id)
+# -------------------------
+class ContextFilter(logging.Filter):
+    """Ensure every LogRecord has a `user_id` attribute so formatting never fails."""
+    def filter(self, record):
+        if not hasattr(record, "user_id"):
+            record.user_id = "N/A"
+        return True
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - User %(user_id)s - %(message)s",
-    handlers=[logging.StreamHandler()]
+    handlers=[logging.StreamHandler()],
 )
+root_logger = logging.getLogger()
+root_logger.addFilter(ContextFilter())
 logger = logging.getLogger(__name__)
 
-# helper to add user_id to log extra safely
 def log_info(msg, user_id="N/A"):
+    """Helper to log with a user_id in the `extra` field (overrides default)."""
     logger.info(msg, extra={"user_id": user_id})
 
-# --- Environment ---
+
+# -------------------------
+# Environment / API keys
+# -------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-if not GEMINI_API_KEY or not TELEGRAM_TOKEN:
-    logger.error("Missing GEMINI_API_KEY or TELEGRAM_TOKEN in environment", extra={"user_id":"N/A"})
+if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
+    log_info("Missing GEMINI_API_KEY or TELEGRAM_TOKEN in environment", "N/A")
     raise SystemExit("Missing GEMINI_API_KEY or TELEGRAM_TOKEN")
 
-# Configure Gemini
+# Configure Gemini (if using)
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
-# --- Simple in-memory user context (same shape you had) ---
+
+# -------------------------
+# Simple in-memory user context
+# -------------------------
 user_context = defaultdict(lambda: {
     "level": "beginner",
     "language": "English",
@@ -88,9 +108,65 @@ You are an advanced, efficient language tutor for students learning English, Khm
 - **Quiz**: For "French grammar quiz" (after vocab): "Q1: Choose the correct article: ___ maison. A) Le, B) La. (Answer: B.) You studied vocab; want another question?"
 
 Make learning fast, fun, and continuous, using past questions to personalize and engage each user!
-""" 
+"""  
 
-# --- Handler ---
+
+# -------------------------
+# Formatting helpers for friendly user replies (HTML for Telegram)
+# -------------------------
+def choose_title_from_user_text(user_text: str) -> str:
+    """Return a short title based on heuristics from the user's message."""
+    t = user_text.lower()
+    if "translate" in t or "translation" in t:
+        return "Translation"
+    if any(w in t for w in ["fix", "correct", "correction", "grammar", "edit"]):
+        return "Correction"
+    if any(w in t for w in ["how", "why", "explain", "explanation", "describe"]):
+        return "Explanation"
+    if "quiz" in t or "exercise" in t or "practice" in t:
+        return "Exercise"
+    return "Answer"
+
+def make_user_friendly_html(raw_text: str, user_text: str) -> str:
+    """
+    Convert raw model output into an HTML-formatted Telegram-safe reply.
+    - Adds a bold title determined by the user's input
+    - Escapes HTML in the body
+    - Splits into short paragraphs for readability
+    """
+    title = choose_title_from_user_text(user_text)
+    if not raw_text:
+        body = "Sorry — I couldn't create a response."
+    else:
+        # Normalize whitespace
+        s = " ".join(raw_text.split())
+        # Break into sentences roughly (simple heuristic)
+        # We won't rely on periods only; split into ~2-sentence paragraphs
+        # Use '.' '?' '!' as separators for splitting
+        import re
+        sentences = re.split(r'(?<=[.?!])\s+', s)
+        # group into paragraphs (2 sentences each)
+        paragraphs = []
+        for i in range(0, len(sentences), 2):
+            para = " ".join(sentences[i:i+2]).strip()
+            if para:
+                paragraphs.append(para)
+        if not paragraphs:
+            paragraphs = [s]
+
+        # Escape each paragraph for HTML safety
+        escaped_paragraphs = [html.escape(p) for p in paragraphs]
+        body = "\n\n".join(escaped_paragraphs)
+
+    # Compose final HTML: bold title + body. Title is simple ASCII so safe.
+    final = f"<b>{html.escape(title)}</b>\n\n{body}"
+    # Truncate to leave room for Telegram limits, safely (4000 char limit)
+    return final[:3900]
+
+
+# -------------------------
+# Handler
+# -------------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -100,19 +176,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_info(f"Input: {user_text}", user_id)
 
-    # update context (same quick rules as your webhook code)
-    if "beginner" in user_text.lower():
+    # Update context (same simple heuristics)
+    lower = user_text.lower()
+    if "beginner" in lower:
         user_context[user_id]["level"] = "beginner"
-    elif "intermediate" in user_text.lower():
+    elif "intermediate" in lower:
         user_context[user_id]["level"] = "intermediate"
-    elif "advanced" in user_text.lower():
+    elif "advanced" in lower:
         user_context[user_id]["level"] = "advanced"
 
-    if any(word in user_text.lower() for word in ["khmer", "cambodian"]):
+    if any(w in lower for w in ["khmer", "cambodian"]):
         user_context[user_id]["language"] = "Khmer"
-    elif any(word in user_text.lower() for word in ["french", "français"]):
+    elif any(w in lower for w in ["french", "français"]):
         user_context[user_id]["language"] = "French"
-    elif "english" in user_text.lower():
+    elif "english" in lower:
         user_context[user_id]["language"] = "English"
 
     user_context[user_id]["last_topic"] = user_text[:50]
@@ -130,44 +207,63 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Previous Questions:\n{history_summary if history_summary else 'None'}\n\nUser: {user_text}"
     )
 
-    # Gemini call can be blocking; run in executor to avoid blocking event loop
+    # Call Gemini in a thread to avoid blocking the event loop
     try:
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: model.generate_content(
-                [{"role": "user", "parts": [{"text": personalized_prompt}]}]
-            )
+            lambda: model.generate_content([{"role": "user", "parts": [{"text": personalized_prompt}]}])
         )
-        # response object shape may vary by library version; .text is the common field
-        reply = getattr(response, "text", str(response))
-        user_context[user_id]["history"][-1]["response"] = reply
-        log_info(f"Response: {reply}", user_id)
+        raw_reply = getattr(response, "text", str(response))
+        user_context[user_id]["history"][-1]["response"] = raw_reply
+        log_info("Generated reply from Gemini", user_id)
     except Exception as e:
-        reply = f"Sorry, something went wrong: {e}"
-        user_context[user_id]["history"][-1]["response"] = reply
-        logger.exception("Error while generating content", extra={"user_id": user_id})
+        raw_reply = f"Sorry, something went wrong while generating content: {e}"
+        user_context[user_id]["history"][-1]["response"] = raw_reply
+        logger.exception("Error while generating content", exc_info=e, extra={"user_id": user_id})
 
-    # reply to user
-    await update.message.reply_text(reply[:4000])  # Telegram message limit guard
+    reply_html = make_user_friendly_html(raw_reply, user_text)
 
-# --- Error handler ---
+    # Send reply using HTML parse mode (bold title will render)
+    await update.message.reply_text(reply_html[:4000], parse_mode="HTML")
+
+
+# -------------------------
+# Error handler
+# -------------------------
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     uid = getattr(update, "effective_user", None)
     uid = uid.id if uid else "N/A"
     logger.error("Update caused error", exc_info=context.error, extra={"user_id": uid})
 
-# --- Main (polling) ---
+
+# -------------------------
+# Main
+# -------------------------
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
 
-    # Start polling (this blocks)
-    log_info("Starting bot (polling)...", "N/A")
-    app.run_polling(allowed_updates=None, timeout=20, poll_interval=1)
+    # Remove any webhook that could conflict with polling (drop old updates)
+    try:
+        # delete_webhook is async — run it before starting polling
+        asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
+        log_info("Deleted existing webhook (if present).", "N/A")
+    except Exception as e:
+        # Not fatal — log and continue. ContextFilter ensures logging won't crash.
+        log_info(f"No webhook removed or error while deleting webhook: {e}", "N/A")
+
+    log_info("Starting bot with polling (drop_pending_updates=True).", "N/A")
+
+    try:
+        # start polling; drop_pending_updates avoids replying to old messages
+        app.run_polling(drop_pending_updates=True, timeout=20, poll_interval=1)
+    except Exception as e:
+        # Catch unexpected errors (including Conflict) and log cleanly
+        logger.exception("Polling stopped due to an exception", exc_info=e, extra={"user_id": "N/A"})
+        raise
+
 
 if __name__ == "__main__":
     main()
-
-
