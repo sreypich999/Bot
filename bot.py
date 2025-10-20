@@ -1,64 +1,48 @@
+# bot_polling.py
 import os
 import logging
 from datetime import datetime
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
-import google.generativeai as genai
-import nest_asyncio
 from collections import defaultdict
 import asyncio
 from dotenv import load_dotenv
-from aiohttp import web
 
-# Load environment variables from .env file (for local testing)
+import google.generativeai as genai
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+
+# load .env locally (Render uses environment vars set in dashboard)
 load_dotenv()
 
-# Custom logging formatter to handle missing user_id
-class CustomFormatter(logging.Formatter):
-    def format(self, record):
-        if not hasattr(record, 'user_id'):
-            record.user_id = 'N/A'
-        return super().format(record)
-
-# Configure logging
+# --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - User %(user_id)s - %(message)s",
-    handlers=[
-        logging.FileHandler("bot_interactions.log"),
-        logging.StreamHandler()
-    ]
+    handlers=[logging.StreamHandler()]
 )
-logger = logging.getLogger()
-for handler in logger.handlers:
-    # Use the existing format string (_fmt) instead of the format method
-    handler.setFormatter(CustomFormatter(handler.formatter._fmt if handler.formatter else "%(asctime)s - %(levelname)s - User %(user_id)s - %(message)s"))
+logger = logging.getLogger(__name__)
 
-# Use environment variables
+# helper to add user_id to log extra safely
+def log_info(msg, user_id="N/A"):
+    logger.info(msg, extra={"user_id": user_id})
+
+# --- Environment ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-# Dynamically construct webhook URL using Render's hostname
-RENDER_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
-WEBHOOK_URL = f"https://{RENDER_HOSTNAME}/webhook" if RENDER_HOSTNAME else os.getenv("WEBHOOK_URL", "http://localhost:8080/webhook")
 
-# Validate environment variables
-if not all([GEMINI_API_KEY, TELEGRAM_TOKEN]):
-    logging.error("Missing environment variables: GEMINI_API_KEY or TELEGRAM_TOKEN")
-    raise ValueError("Missing required environment variables")
-if not WEBHOOK_URL:
-    logging.error("WEBHOOK_URL or RENDER_EXTERNAL_HOSTNAME must be set for webhook mode")
-    raise ValueError("Missing WEBHOOK_URL or RENDER_EXTERNAL_HOSTNAME")
+if not GEMINI_API_KEY or not TELEGRAM_TOKEN:
+    logger.error("Missing GEMINI_API_KEY or TELEGRAM_TOKEN in environment", extra={"user_id":"N/A"})
+    raise SystemExit("Missing GEMINI_API_KEY or TELEGRAM_TOKEN")
 
-# Configure Gemini API
+# Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
-# In-memory user context and history storage (max 5 previous interactions per user)
+# --- Simple in-memory user context (same shape you had) ---
 user_context = defaultdict(lambda: {
     "level": "beginner",
     "language": "English",
     "last_topic": None,
-    "history": []  # List of (question, response) tuples
+    "history": []
 })
 
 SYSTEM_PROMPT = """
@@ -104,96 +88,86 @@ You are an advanced, efficient language tutor for students learning English, Khm
 - **Quiz**: For "French grammar quiz" (after vocab): "Q1: Choose the correct article: ___ maison. A) Le, B) La. (Answer: B.) You studied vocab; want another question?"
 
 Make learning fast, fun, and continuous, using past questions to personalize and engage each user!
-"""
+""" 
 
+# --- Handler ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+
     user_text = update.message.text
     user_id = str(update.message.from_user.id)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_info(f"Input: {user_text}", user_id)
 
-    # Log user input
-    logging.info(f"Input: {user_text}", extra={"user_id": user_id})
-
-    # Update user context
+    # update context (same quick rules as your webhook code)
     if "beginner" in user_text.lower():
         user_context[user_id]["level"] = "beginner"
     elif "intermediate" in user_text.lower():
         user_context[user_id]["level"] = "intermediate"
     elif "advanced" in user_text.lower():
         user_context[user_id]["level"] = "advanced"
+
     if any(word in user_text.lower() for word in ["khmer", "cambodian"]):
         user_context[user_id]["language"] = "Khmer"
     elif any(word in user_text.lower() for word in ["french", "français"]):
         user_context[user_id]["language"] = "French"
-    elif any(word in user_text.lower() for word in ["english"]):
+    elif "english" in user_text.lower():
         user_context[user_id]["language"] = "English"
-    user_context[user_id]["last_topic"] = user_text[:50]
 
-    # Add current question to history (limit to 5 entries)
+    user_context[user_id]["last_topic"] = user_text[:50]
     if len(user_context[user_id]["history"]) >= 5:
         user_context[user_id]["history"].pop(0)
     user_context[user_id]["history"].append({"question": user_text, "timestamp": timestamp})
 
-    # Build personalized prompt with history
     history_summary = "\n".join(
-        [f"Q (at {entry['timestamp']}): {entry['question']}" for entry in user_context[user_id]["history"][:-1]]
+        [f"Q (at {e['timestamp']}): {e['question']}" for e in user_context[user_id]["history"][:-1]]
     )
+
     personalized_prompt = (
         f"{SYSTEM_PROMPT}\n\nUser Context: Level={user_context[user_id]['level']}, "
         f"Preferred Language={user_context[user_id]['language']}, Last Topic={user_context[user_id]['last_topic']}\n"
-        f"Previous Questions:\n{history_summary if history_summary else 'None'}"
+        f"Previous Questions:\n{history_summary if history_summary else 'None'}\n\nUser: {user_text}"
     )
 
+    # Gemini call can be blocking; run in executor to avoid blocking event loop
     try:
-        response = await asyncio.get_event_loop().run_in_executor(
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
             None,
             lambda: model.generate_content(
-                [{"role": "user", "parts": [{"text": personalized_prompt + "\n\nUser: " + user_text}]}]
+                [{"role": "user", "parts": [{"text": personalized_prompt}]}]
             )
         )
-        reply = response.text
-        # Add response to history
+        # response object shape may vary by library version; .text is the common field
+        reply = getattr(response, "text", str(response))
         user_context[user_id]["history"][-1]["response"] = reply
-        logging.info(f"Response: {reply}", extra={"user_id": user_id})
+        log_info(f"Response: {reply}", user_id)
     except Exception as e:
-        reply = f"Sorry, something went wrong: {str(e)}. Try a quiz, translation, or grammar task!"
+        reply = f"Sorry, something went wrong: {e}"
         user_context[user_id]["history"][-1]["response"] = reply
-        logging.error(f"Error: {str(e)}", extra={"user_id": user_id})
+        logger.exception("Error while generating content", extra={"user_id": user_id})
 
-    await update.message.reply_text(reply)
+    # reply to user
+    await update.message.reply_text(reply[:4000])  # Telegram message limit guard
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.error(f"Update {update} caused error: {context.error}", extra={"user_id": update.effective_user.id if update else 'N/A'})
+# --- Error handler ---
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    uid = getattr(update, "effective_user", None)
+    uid = uid.id if uid else "N/A"
+    logger.error("Update caused error", exc_info=context.error, extra={"user_id": uid})
 
-async def webhook_handler(request):
-    app = request.app['telegram_app']
-    update = Update.de_json(await request.json(), app.bot)
-    await app.process_update(update)
-    return web.Response()
-
+# --- Main (polling) ---
 def main():
-    nest_asyncio.apply()  # Apply nest_asyncio for certain environments
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
 
-    # Set up aiohttp server for webhook
-    web_app = web.Application()
-    web_app['telegram_app'] = app
-    web_app.router.add_post('/webhook', webhook_handler)
-
-    # Start webhook
-    async def start_webhook():
-        await app.bot.set_webhook(url=WEBHOOK_URL)
-        logging.info(f"Webhook set to {WEBHOOK_URL}", extra={"user_id": "N/A"})
-        runner = web.AppRunner(web_app)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', 8080)
-        await site.start()
-        print("Bot started with webhook…")
-        await asyncio.Event().wait()  # Keep running
-
-    asyncio.run(start_webhook())
+    # Start polling (this blocks)
+    log_info("Starting bot (polling)...", "N/A")
+    app.run_polling(allowed_updates=None, timeout=20, poll_interval=1)
 
 if __name__ == "__main__":
     main()
+
+
