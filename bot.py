@@ -1,3 +1,4 @@
+
 import os
 import logging
 import asyncio
@@ -73,6 +74,8 @@ user_context = defaultdict(lambda: {
 SYSTEM_PROMPT = """
 You are an advanced, efficient language tutor for students learning English, Khmer, and French. 
 
+You are an advanced, efficient language tutor for students learning English, Khmer, and French. 
+
 IMPORTANT FORMATTING RULES:
 - NEVER use markdown tables, code blocks, or complex formatting
 - Use clear, simple language with natural line breaks
@@ -131,8 +134,22 @@ You are an advanced, efficient language tutor for students learning English, Khm
 - **Quiz**: For "French grammar quiz" (after vocab): "Q1: Choose the correct article: ___ maison. A) Le, B) La. (Answer: B.) You studied vocab; want another question?"
 
 Make learning fast, fun, and continuous, using past questions to personalize and engage each user!
- 
+IMPORTANT FORMATTING RULES:
+- NEVER use markdown tables, code blocks, or complex formatting
+- Use clear, simple language with natural line breaks
+- For grammar explanations, use this format:
+  Tense: [Name]
+  Structure: [formula]
+  Use: [when to use it]
+  Example: [simple example]
 
+- For vocabulary: list items with clear definitions
+- For comparisons: use simple bullet points with • 
+- Keep responses concise but complete
+- Use natural paragraph breaks for readability
+- Focus on clear, conversational explanations
+
+You assist with grammar, translation, vocabulary, writing, pronunciation, and conversation practice. Keep responses friendly, engaging, and easy to read in plain text.
 
 Focus on being helpful, clear, and engaging. Provide practical language help that's easy to understand."""
 
@@ -230,14 +247,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    # Check if this is a new user or welcome message
+    # FIXED: Only show welcome to truly new users, not for every message
     is_new_user = user_id not in user_context or len(user_context[user_id]["history"]) == 0
-    is_greeting = any(word in user_text.lower() for word in ["hello", "hi", "hey", "start", "/start"])
     
-    if is_new_user or is_greeting:
+    # FIXED: More precise greeting detection - only exact matches
+    exact_greetings = ["hello", "hi", "hey", "start", "/start", "bonjour", "សួស្តី"]
+    user_text_lower = user_text.lower().strip()
+    is_exact_greeting = user_text_lower in exact_greetings
+    is_clear_greeting = any(
+        user_text_lower.startswith(word) for word in ["hello", "hi", "hey", "hi,", "hello,"]
+    )
+    is_greeting = is_exact_greeting or is_clear_greeting
+
+    if is_new_user and is_greeting:
         await update.message.reply_text(WELCOME_MESSAGE, parse_mode="HTML")
-        if is_greeting and not is_new_user:
-            return  # Don't process greetings as regular messages for existing users
+        # Initialize user context
+        user_context[user_id] = {
+            "level": "beginner",
+            "language": "English", 
+            "last_topic": None,
+            "history": [],
+            "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        user_context[user_id]["history"].append({
+            "question": user_text, 
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "username": username,
+            "response": "Welcome message sent"
+        })
+        return
+    elif is_greeting and not is_new_user:
+        # Quick hello for existing users
+        await update.message.reply_text("👋 Hello again! How can I help you with your language learning today?", parse_mode="HTML")
+        return
+
+    # Initialize user context if not exists (for new users who don't send greetings)
+    if is_new_user:
+        user_context[user_id] = {
+            "level": "beginner",
+            "language": "English", 
+            "last_topic": None,
+            "history": [],
+            "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
 
     # Update user context
     lower = user_text.lower()
@@ -272,20 +324,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     personalized_prompt = f"""
-{SYSTEM_PROMPT}
+You are a helpful language tutor. Please help with this request.
 
-Student Profile:
-- Name: {username}
-- Level: {user_context[user_id]['level']}
-- Learning: {user_context[user_id]['language']}
-- Recent topic: {user_context[user_id]['last_topic']}
+Student: {username}
+Current question: {user_text}
 
-Previous conversation:
-{history_summary if history_summary else 'First interaction with this student'}
-
-Current question from {username}: {user_text}
-
-Please provide a helpful, clear, and personalized response:
+Please provide a helpful, clear response:
 """
 
     # Generate response
@@ -294,8 +338,6 @@ Please provide a helpful, clear, and personalized response:
         <b>⚠️ Service Update</b>
 
         I'm having temporary technical issues. 
-        I can still help with basic language questions, but my AI features are temporarily unavailable.
-
         Please try again in a few minutes!
         """
         await update.message.reply_text(reply_html, parse_mode="HTML")
@@ -452,3 +494,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
