@@ -12,17 +12,15 @@ import re
 load_dotenv()
 
 # -------------------------
-# Fixed Logging Configuration
+# Logging Configuration
 # -------------------------
 
 class ContextFilter(logging.Filter):
-    """Ensure every LogRecord has a `user_id` attribute."""
     def filter(self, record):
         if not hasattr(record, "user_id"):
             record.user_id = "N/A"
         return True
 
-# Set up logging properly
 logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
@@ -30,12 +28,10 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
-# Add filter to all handlers
 for handler in logging.getLogger().handlers:
     handler.addFilter(ContextFilter())
 
 def log_info(msg, user_id="N/A"):
-    """Helper to log with a user_id."""
     logger.info(msg, extra={"user_id": user_id})
 
 # -------------------------
@@ -45,11 +41,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 if not TELEGRAM_TOKEN:
-    log_info("Missing TELEGRAM_TOKEN in environment", "N/A")
+    log_info("Missing TELEGRAM_TOKEN", "N/A")
     raise SystemExit("Missing TELEGRAM_TOKEN")
 
 if not GEMINI_API_KEY:
-    log_info("Missing GEMINI_API_KEY in environment", "N/A")
+    log_info("Missing GEMINI_API_KEY", "N/A")
     raise SystemExit("Missing GEMINI_API_KEY")
 
 # Configure Gemini
@@ -57,18 +53,20 @@ try:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel("gemini-2.0-flash")
+    log_info("Gemini configured successfully", "N/A")
 except Exception as e:
     log_info(f"Gemini configuration failed: {e}", "N/A")
     model = None
 
 # -------------------------
-# Simple in-memory user context
+# User context - MULTI-USER SUPPORT
 # -------------------------
 user_context = defaultdict(lambda: {
     "level": "beginner",
-    "language": "English",
+    "language": "English", 
     "last_topic": None,
-    "history": []
+    "history": [],
+    "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 })
 
 # IMPROVED SYSTEM PROMPT with better formatting instructions
@@ -134,76 +132,84 @@ You are an advanced, efficient language tutor for students learning English, Khm
 
 Make learning fast, fun, and continuous, using past questions to personalize and engage each user!
  
-"""
+
+
+Focus on being helpful, clear, and engaging. Provide practical language help that's easy to understand."""
 
 # -------------------------
-# IMPROVED Formatting helpers
+# Formatting helpers
 # -------------------------
 def choose_title_from_user_text(user_text: str) -> str:
-    """Return a short title based on heuristics from the user's message."""
     t = user_text.lower()
-    if "translate" in t or "translation" in t:
+    if "translate" in t:
         return "🌍 Translation"
-    if any(w in t for w in ["fix", "correct", "correction", "grammar", "edit"]):
-        return "📝 Correction"
-    if any(w in t for w in ["how", "why", "explain", "explanation", "describe"]):
+    if any(w in t for w in ["fix", "correct", "grammar"]):
+        return "📝 Correction" 
+    if any(w in t for w in ["explain", "how", "why"]):
         return "💡 Explanation"
-    if "quiz" in t or "exercise" in t or "practice" in t:
+    if any(w in t for w in ["quiz", "exercise", "practice"]):
         return "🎯 Exercise"
-    if "tense" in t or "verb" in t or "grammar" in t:
+    if any(w in t for w in ["tense", "verb", "grammar"]):
         return "📚 Grammar Guide"
-    if any(w in t for w in ["word", "vocab", "phrase", "meaning"]):
+    if any(w in t for w in ["word", "vocab", "phrase"]):
         return "📖 Vocabulary"
+    if "hello" in t or "hi" in t or "start" in t:
+        return "👋 Welcome"
     return "💬 Answer"
 
 def clean_and_format_text(raw_text: str) -> str:
-    """Clean up the raw model output and format it properly for Telegram."""
     if not raw_text:
-        return "Sorry — I couldn't create a response. Please try again!"
+        return "I couldn't generate a response. Please try again with a different question!"
     
-    # Remove markdown tables and code blocks
+    # Remove markdown and clean up
     cleaned = re.sub(r'\|.*?\||```.*?```', '', raw_text, flags=re.DOTALL)
-    
-    # Remove excessive line breaks
-    cleaned = re.sub(r'\n\s*\n', '\n\n', cleaned)
-    
-    # Clean up any remaining markdown
     cleaned = re.sub(r'[*_`#]', '', cleaned)
-    
-    # Ensure proper spacing
+    cleaned = re.sub(r'\n\s*\n', '\n\n', cleaned)
     cleaned = re.sub(r' +', ' ', cleaned)
-    cleaned = cleaned.strip()
     
-    return cleaned
+    return cleaned.strip()
 
 def make_user_friendly_html(raw_text: str, user_text: str) -> str:
-    """Convert raw model output into well-formatted HTML for Telegram."""
     title = choose_title_from_user_text(user_text)
     body = clean_and_format_text(raw_text)
     
-    # Split into paragraphs and escape HTML
     paragraphs = [p.strip() for p in body.split('\n\n') if p.strip()]
     escaped_paragraphs = [html.escape(p) for p in paragraphs]
-    
-    # Join with line breaks
     formatted_body = "\n\n".join(escaped_paragraphs)
     
     final = f"<b>{html.escape(title)}</b>\n\n{formatted_body}"
     
-    # Truncate if too long, but try to keep it complete
     if len(final) > 4000:
-        # Find a good breaking point
         truncated = final[:3900]
         if '\n\n' in truncated:
-            # Break at last paragraph
             truncated = truncated.rsplit('\n\n', 1)[0]
-        truncated += "\n\n... (message too long, please ask more specifically)"
+        truncated += "\n\n💡 <i>Message too long - feel free to ask follow-up questions!</i>"
         return truncated
     
     return final
 
 # -------------------------
-# Handler
+# Welcome message for new users
+# -------------------------
+WELCOME_MESSAGE = """
+<b>👋 Welcome to Language Tutor!</b>
+
+I'm here to help you learn English, Khmer, and French. I can help with:
+
+• 📝 Grammar corrections
+• 🌍 Translations  
+• 📚 Grammar explanations
+• 📖 Vocabulary building
+• 🎯 Practice exercises
+• 💡 Language tips
+
+Just send me a message in any language and I'll help you!
+
+<em>Try asking: "Can you help me with English tenses?" or "Translate 'hello' to Khmer"</em>
+"""
+
+# -------------------------
+# Telegram Handlers - MULTI-USER READY
 # -------------------------
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
@@ -214,14 +220,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_text = update.message.text
     user_id = str(update.message.from_user.id)
-    log_info(f"Input: {user_text}", user_id)
+    username = update.message.from_user.first_name or "Student"
+    
+    log_info(f"Message from {username}: {user_text}", user_id)
 
-    # Update context
+    # Send typing action to show bot is working
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    except:
+        pass
+
+    # Check if this is a new user or welcome message
+    is_new_user = user_id not in user_context or len(user_context[user_id]["history"]) == 0
+    is_greeting = any(word in user_text.lower() for word in ["hello", "hi", "hey", "start", "/start"])
+    
+    if is_new_user or is_greeting:
+        await update.message.reply_text(WELCOME_MESSAGE, parse_mode="HTML")
+        if is_greeting and not is_new_user:
+            return  # Don't process greetings as regular messages for existing users
+
+    # Update user context
     lower = user_text.lower()
     if "beginner" in lower:
         user_context[user_id]["level"] = "beginner"
     elif "intermediate" in lower:
-        user_context[user_id]["level"] = "intermediate"
+        user_context[user_id]["level"] = "intermediate" 
     elif "advanced" in lower:
         user_context[user_id]["level"] = "advanced"
 
@@ -232,98 +255,200 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "english" in lower:
         user_context[user_id]["language"] = "English"
 
+    # Update history (keep last 10 messages)
     user_context[user_id]["last_topic"] = user_text[:50]
-    if len(user_context[user_id]["history"]) >= 5:
+    if len(user_context[user_id]["history"]) >= 10:
         user_context[user_id]["history"].pop(0)
-    user_context[user_id]["history"].append({"question": user_text, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    
+    user_context[user_id]["history"].append({
+        "question": user_text, 
+        "timestamp": datetime.now().strftime("%H:%M:%S"),
+        "username": username
+    })
 
+    # Build personalized prompt
     history_summary = "\n".join(
-        [f"Q (at {e['timestamp']}): {e['question']}" for e in user_context[user_id]["history"][:-1]]
+        [f"- {e['username']}: {e['question']}" for e in user_context[user_id]["history"][:-1]]
     )
 
-    personalized_prompt = (
-        f"{SYSTEM_PROMPT}\n\nUser Context: Level={user_context[user_id]['level']}, "
-        f"Preferred Language={user_context[user_id]['language']}, Last Topic={user_context[user_id]['last_topic']}\n"
-        f"Previous Questions:\n{history_summary if history_summary else 'None'}\n\nUser: {user_text}"
-    )
+    personalized_prompt = f"""
+{SYSTEM_PROMPT}
 
+Student Profile:
+- Name: {username}
+- Level: {user_context[user_id]['level']}
+- Learning: {user_context[user_id]['language']}
+- Recent topic: {user_context[user_id]['last_topic']}
+
+Previous conversation:
+{history_summary if history_summary else 'First interaction with this student'}
+
+Current question from {username}: {user_text}
+
+Please provide a helpful, clear, and personalized response:
+"""
+
+    # Generate response
     if not model:
-        reply_html = "<b>⚠️ Service Unavailable</b>\n\nSorry, the AI service is currently unavailable. Please try again later."
+        reply_html = """
+        <b>⚠️ Service Update</b>
+
+        I'm having temporary technical issues. 
+        I can still help with basic language questions, but my AI features are temporarily unavailable.
+
+        Please try again in a few minutes!
+        """
         await update.message.reply_text(reply_html, parse_mode="HTML")
         return
 
     try:
-        # Use async execution for better performance
-        response = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: model.generate_content(personalized_prompt)
+        # Generate response with timeout
+        response = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: model.generate_content(personalized_prompt)
+            ),
+            timeout=30.0  # 30 second timeout
         )
-        raw_reply = response.text if hasattr(response, 'text') else str(response)
-        user_context[user_id]["history"][-1]["response"] = raw_reply
-        log_info("Generated reply from Gemini", user_id)
+        raw_reply = response.text if hasattr(response, 'text') else "I'm here to help! Could you please rephrase your question?"
+        log_info(f"Response generated for {username}", user_id)
+    except asyncio.TimeoutError:
+        raw_reply = "I'm taking a bit longer than usual to respond. Please try again with a simpler question or wait a moment!"
+        log_info(f"Timeout generating response for {username}", user_id)
     except Exception as e:
-        raw_reply = f"Sorry, I encountered an error while processing your request. Please try again with a different question."
-        user_context[user_id]["history"][-1]["response"] = raw_reply
-        logger.error(f"Gemini API error: {e}", extra={"user_id": user_id})
+        raw_reply = "I encountered an issue while processing your request. Please try again with a different question!"
+        log_info(f"Error generating response for {username}: {e}", user_id)
 
+    # Update history with response
+    user_context[user_id]["history"][-1]["response"] = raw_reply[:100] + "..." if len(raw_reply) > 100 else raw_reply
+
+    # Send response
     reply_html = make_user_friendly_html(raw_reply, user_text)
     await update.message.reply_text(reply_html, parse_mode="HTML")
 
-# -------------------------
-# Error handler
-# -------------------------
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     uid = "N/A"
     if update and hasattr(update, 'effective_user') and update.effective_user:
         uid = update.effective_user.id
-    logger.error(f"Update caused error: {context.error}", exc_info=context.error, extra={"user_id": uid})
-
-# -------------------------
-# Webhook cleanup and conflict resolution
-# -------------------------
-async def cleanup_webhooks(bot):
-    """Clean up any existing webhooks to prevent conflicts"""
-    try:
-        # Get current webhook info
-        webhook_info = await bot.get_webhook_info()
-        if webhook_info.url:
-            log_info(f"Found existing webhook: {webhook_info.url}", "N/A")
-            # Delete the webhook
-            await bot.delete_webhook(drop_pending_updates=True)
-            log_info("Successfully deleted webhook", "N/A")
-            # Wait a bit for the cleanup to propagate
-            await asyncio.sleep(2)
-        else:
-            log_info("No existing webhook found", "N/A")
-    except Exception as e:
-        log_info(f"Error during webhook cleanup: {e}", "N/A")
-
-# -------------------------
-# SIMPLIFIED Main - Using polling with better error handling
-# -------------------------
-def main():
-    """Main function with simplified polling approach"""
-    # Build application
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_error_handler(error_handler)
-
-    log_info("Starting bot with polling...", "N/A")
     
-    try:
-        # Simple polling approach
-        app.run_polling(
-            drop_pending_updates=True,
-            timeout=30,
-            poll_interval=3,
-            close_loop=False
-        )
-    except Exception as e:
-        logger.error(f"Polling stopped: {e}", extra={"user_id": "N/A"})
-        # Wait before potentially restarting
-        time.sleep(10)
-        raise
+    error_msg = str(context.error) if context.error else "Unknown error"
+    
+    # Don't log conflict errors as they're normal during deployment
+    if "Conflict" not in error_msg:
+        logger.error(f"Error: {error_msg}", extra={"user_id": uid})
+
+# -------------------------
+# BOT HEALTH MONITORING
+# -------------------------
+async def health_check():
+    """Periodic health check to ensure bot is running"""
+    while True:
+        try:
+            active_users = len(user_context)
+            total_messages = sum(len(user["history"]) for user in user_context.values())
+            
+            log_info(f"🤖 Health Check: {active_users} active users, {total_messages} total messages", "SYSTEM")
+            
+            # Keep alive - log every 30 minutes
+            await asyncio.sleep(1800)  # 30 minutes
+            
+        except Exception as e:
+            log_info(f"Health check error: {e}", "SYSTEM")
+            await asyncio.sleep(300)  # 5 minutes on error
+
+# -------------------------
+# ROBUST MAIN FUNCTION - ALWAYS RUNNING
+# -------------------------
+async def main_async():
+    """Async main function with health monitoring"""
+    log_info("🚀 Starting Language Tutor Bot...", "SYSTEM")
+    
+    # Wait to ensure any previous instance is stopped
+    await asyncio.sleep(10)
+    
+    retry_count = 0
+    max_retries = 5
+    
+    while retry_count < max_retries:
+        try:
+            # Build application
+            app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+            
+            # Add handlers
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+            app.add_error_handler(error_handler)
+            
+            log_info(f"🔄 Starting polling (attempt {retry_count + 1}/{max_retries})...", "SYSTEM")
+            
+            # Start health monitoring in background
+            health_task = asyncio.create_task(health_check())
+            
+            # Start polling
+            await app.initialize()
+            await app.start()
+            await app.updater.start_polling(
+                poll_interval=5.0,
+                timeout=30,
+                drop_pending_updates=True,
+                allowed_updates=None
+            )
+            
+            log_info("✅ Bot is now running and ready for multiple users!", "SYSTEM")
+            log_info("💬 Users can now start chatting with the bot", "SYSTEM")
+            
+            # Keep the bot running forever
+            while True:
+                await asyncio.sleep(3600)  # Sleep for 1 hour
+                
+        except Exception as e:
+            retry_count += 1
+            error_msg = str(e)
+            
+            # Cleanup on error
+            try:
+                if 'app' in locals():
+                    await app.updater.stop()
+                    await app.stop()
+                    await app.shutdown()
+            except:
+                pass
+            
+            if "Conflict" in error_msg:
+                log_info(f"⚡ Conflict detected, waiting before retry {retry_count}...", "SYSTEM")
+                await asyncio.sleep(20 * retry_count)  # Exponential backoff
+            else:
+                logger.error(f"❌ Unexpected error: {error_msg}", extra={"user_id": "SYSTEM"})
+                await asyncio.sleep(10)
+                
+            if retry_count >= max_retries:
+                logger.error(f"💥 Max retries reached. Bot cannot start.", extra={"user_id": "SYSTEM"})
+                return False
+    
+    return True
+
+def main():
+    """Main function that ensures bot runs forever"""
+    log_info("🎯 Starting Forever-Running Language Tutor Bot...", "SYSTEM")
+    
+    while True:
+        try:
+            # Run the async main function
+            success = asyncio.run(main_async())
+            
+            if not success:
+                log_info("🔁 Restarting bot in 30 seconds...", "SYSTEM")
+                time.sleep(30)
+            else:
+                log_info("🔄 Bot stopped normally, restarting in 10 seconds...", "SYSTEM")
+                time.sleep(10)
+                
+        except KeyboardInterrupt:
+            log_info("⏹️ Bot stopped by user", "SYSTEM")
+            break
+        except Exception as e:
+            logger.error(f"💥 Critical error: {e}", extra={"user_id": "SYSTEM"})
+            log_info("🔄 Restarting bot in 30 seconds...", "SYSTEM")
+            time.sleep(30)
 
 if __name__ == "__main__":
     main()
-
