@@ -38,19 +38,19 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 # Dynamically construct webhook URL using Render's hostname
 RENDER_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
-WEBHOOK_URL = f"https://{RENDER_HOSTNAME}/webhook" if RENDER_HOSTNAME else os.getenv("WEBHOOK_URL")
+WEBHOOK_URL = f"https://{RENDER_HOSTNAME}/webhook" if RENDER_HOSTNAME else os.getenv("WEBHOOK_URL", "http://localhost:8080/webhook")
 
 # Validate environment variables
 if not all([GEMINI_API_KEY, TELEGRAM_TOKEN]):
     logging.error("Missing environment variables: GEMINI_API_KEY or TELEGRAM_TOKEN")
     raise ValueError("Missing required environment variables")
-if not WEBHOOK_URL and not RENDER_HOSTNAME:
+if not WEBHOOK_URL:
     logging.error("WEBHOOK_URL or RENDER_EXTERNAL_HOSTNAME must be set for webhook mode")
     raise ValueError("Missing WEBHOOK_URL or RENDER_EXTERNAL_HOSTNAME")
 
 # Configure Gemini API
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 # In-memory user context and history storage (max 5 previous interactions per user)
 user_context = defaultdict(lambda: {
