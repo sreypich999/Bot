@@ -6,6 +6,15 @@ from datetime import datetime
 from collections import defaultdict
 from dotenv import load_dotenv
 import html
+import re
+
+# If you ever run in a notebook / interactive environment, nest_asyncio helps.
+# It's harmless on normal servers, but optional.
+try:
+    import nest_asyncio
+    nest_asyncio.apply()
+except Exception:
+    pass
 
 # Third-party SDK (keep if you use Gemini)
 import google.generativeai as genai
@@ -108,7 +117,7 @@ You are an advanced, efficient language tutor for students learning English, Khm
 - **Quiz**: For "French grammar quiz" (after vocab): "Q1: Choose the correct article: ___ maison. A) Le, B) La. (Answer: B.) You studied vocab; want another question?"
 
 Make learning fast, fun, and continuous, using past questions to personalize and engage each user!
-"""  
+"""   
 
 
 # -------------------------
@@ -140,12 +149,9 @@ def make_user_friendly_html(raw_text: str, user_text: str) -> str:
     else:
         # Normalize whitespace
         s = " ".join(raw_text.split())
-        # Break into sentences roughly (simple heuristic)
-        # We won't rely on periods only; split into ~2-sentence paragraphs
-        # Use '.' '?' '!' as separators for splitting
-        import re
+        # Split into sentence-like pieces using punctuation
         sentences = re.split(r'(?<=[.?!])\s+', s)
-        # group into paragraphs (2 sentences each)
+        # Group into ~2-sentence paragraphs
         paragraphs = []
         for i in range(0, len(sentences), 2):
             para = " ".join(sentences[i:i+2]).strip()
@@ -158,10 +164,8 @@ def make_user_friendly_html(raw_text: str, user_text: str) -> str:
         escaped_paragraphs = [html.escape(p) for p in paragraphs]
         body = "\n\n".join(escaped_paragraphs)
 
-    # Compose final HTML: bold title + body. Title is simple ASCII so safe.
     final = f"<b>{html.escape(title)}</b>\n\n{body}"
-    # Truncate to leave room for Telegram limits, safely (4000 char limit)
-    return final[:3900]
+    return final[:3900]  # safe truncate (Telegram limit margin)
 
 
 # -------------------------
@@ -176,7 +180,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_info(f"Input: {user_text}", user_id)
 
-    # Update context (same simple heuristics)
+    # Update context (simple heuristics)
     lower = user_text.lower()
     if "beginner" in lower:
         user_context[user_id]["level"] = "beginner"
@@ -207,9 +211,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Previous Questions:\n{history_summary if history_summary else 'None'}\n\nUser: {user_text}"
     )
 
-    # Call Gemini in a thread to avoid blocking the event loop
+    # Call Gemini in a thread to avoid blocking the event loop too long
     try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # fallback to get_event_loop (should not usually happen because handler runs under the app's loop)
         loop = asyncio.get_event_loop()
+
+    try:
         response = await loop.run_in_executor(
             None,
             lambda: model.generate_content([{"role": "user", "parts": [{"text": personalized_prompt}]}])
@@ -223,8 +232,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Error while generating content", exc_info=e, extra={"user_id": user_id})
 
     reply_html = make_user_friendly_html(raw_reply, user_text)
-
-    # Send reply using HTML parse mode (bold title will render)
     await update.message.reply_text(reply_html[:4000], parse_mode="HTML")
 
 
@@ -241,26 +248,37 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 # Main
 # -------------------------
 def main():
+    # Build application
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
 
+    # Ensure an event loop exists and is set for the main thread (fixes Python 3.12 behavior)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop -> create and set one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    # If the loop is closed for some reason, recreate it
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     # Remove any webhook that could conflict with polling (drop old updates)
     try:
-        # delete_webhook is async — run it before starting polling
-        asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
+        loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
         log_info("Deleted existing webhook (if present).", "N/A")
     except Exception as e:
-        # Not fatal — log and continue. ContextFilter ensures logging won't crash.
         log_info(f"No webhook removed or error while deleting webhook: {e}", "N/A")
 
     log_info("Starting bot with polling (drop_pending_updates=True).", "N/A")
 
     try:
-        # start polling; drop_pending_updates avoids replying to old messages
+        # Blocking call that starts the bot's internal loop
         app.run_polling(drop_pending_updates=True, timeout=20, poll_interval=1)
     except Exception as e:
-        # Catch unexpected errors (including Conflict) and log cleanly
         logger.exception("Polling stopped due to an exception", exc_info=e, extra={"user_id": "N/A"})
         raise
 
