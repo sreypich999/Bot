@@ -9,6 +9,26 @@ from dotenv import load_dotenv
 import html
 import re
 import base64
+import json
+
+# 🔥 REplit KEEP-ALIVE SETUP
+from flask import Flask
+from threading import Thread
+
+# Keep-alive server (prevents Replit from sleeping)
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "🤖 Language Tutor Bot is Running! Send /start to begin."
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.daemon = True
+    t.start()
 
 # Load environment variables
 load_dotenv()
@@ -55,8 +75,8 @@ try:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
     # Use a model that supports vision
-    model = genai.GenerativeModel("gemini-2.5-flash")
-    vision_model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    vision_model = genai.GenerativeModel("gemini-1.5-flash")
     log_info("Gemini configured successfully with vision support", "N/A")
 except Exception as e:
     log_info(f"Gemini configuration failed: {e}", "N/A")
@@ -64,7 +84,7 @@ except Exception as e:
     vision_model = None
 
 # -------------------------
-# User context - MULTI-USER SUPPORT with ENHANCED MEMORY
+# ENHANCED User context with COMPREHENSIVE FILE MEMORY
 # -------------------------
 user_context = defaultdict(lambda: {
     "level": "beginner",
@@ -78,10 +98,12 @@ user_context = defaultdict(lambda: {
     "writing_projects": [],
     "current_essay": None,
     "grammar_issues": [],
-    "uploaded_documents": []
+    "uploaded_documents": [],
+    "current_file_analysis": None,  # Track current file being discussed
+    "file_memory": []  # Store all file analyses with metadata
 })
 
-# COMPREHENSIVE SYSTEM PROMPT with FILE UPLOAD SUPPORT
+# COMPREHENSIVE SYSTEM PROMPT with ENHANCED FILE MEMORY SUPPORT
 SYSTEM_PROMPT = """
 You are an advanced, comprehensive language tutor for students learning English, Khmer, and French. 
 
@@ -100,38 +122,60 @@ IMPORTANT FORMATTING RULES:
 - Use natural paragraph breaks for readability
 - Focus on clear, conversational explanations
 
-COMPREHENSIVE FILE UPLOAD SUPPORT:
+CRITICAL FILE MEMORY SYSTEM:
+You have access to the student's uploaded files and their analyses. When a student asks questions about uploaded files:
+
+1. REFERENCE PREVIOUS FILE ANALYSES: Always check if the current question relates to previously uploaded files
+2. ANSWER QUESTIONS ABOUT FILES: Students can ask follow-up questions about uploaded files like:
+   - "Explain page 3 of my document"
+   - "What was the main point of my uploaded essay?"
+   - "Help me answer question 5 from my worksheet"
+   - "Can you summarize my uploaded notes again?"
+   - "What grammar errors did you find in my writing?"
+3. CONTINUE FILE DISCUSSIONS: Build on previous file analyses and discussions
+4. COMPARE MULTIPLE FILES: Help students compare content across different uploaded files
+
+ENHANCED FILE UPLOAD SUPPORT WITH MEMORY:
 
 DOCUMENT ANALYSIS (PDF, Images):
-• Homework Assignments: Explain requirements, help understand questions
-• Quiz/Test Papers: Analyze questions, provide guidance on answering
-• Study Materials: Summarize content, explain concepts
-• Writing Samples: Provide feedback on essays, compositions
-• Grammar Exercises: Check answers, explain corrections
-• Reading Comprehension: Help understand passages, answer questions
-• Presentation Slides: Analyze content, suggest improvements
-• Research Papers: Help understand academic content
+• Homework Assignments: Explain requirements, help understand questions, remember specific exercises
+• Quiz/Test Papers: Analyze questions, provide guidance, remember answers and explanations
+• Study Materials: Summarize content, explain concepts, track key points
+• Writing Samples: Provide feedback on essays, remember grammar issues and suggestions
+• Grammar Exercises: Check answers, explain corrections, track progress
+• Reading Comprehension: Help understand passages, remember questions and answers
+• Presentation Slides: Analyze content, suggest improvements, remember structure
+• Research Papers: Help understand academic content, remember key findings
 
 IMAGE ANALYSIS (JPG, PNG):
-• Screenshots of questions: Read and explain what's being asked
-• Handwritten notes: Transcribe and provide feedback
-• Textbook pages: Explain content and concepts
-• Quiz screenshots: Help understand questions and find answers
-• Diagram explanations: Describe and explain visual content
-• Worksheet images: Help complete assignments
-• Whiteboard photos: Transcribe and explain content
+• Screenshots of questions: Read and explain, remember question context
+• Handwritten notes: Transcribe and provide feedback, remember content
+• Textbook pages: Explain content and concepts, remember key topics
+• Quiz screenshots: Help understand questions, remember answers
+• Diagram explanations: Describe and explain, remember visual content
+• Worksheet images: Help complete assignments, track progress
+• Whiteboard photos: Transcribe and explain, remember content
 
-SPECIFIC STUDENT USE CASES:
-1. "What does this document want me to do?" - Explain instructions
-2. "Help me understand this question" - Break down complex questions
-3. "Is my answer correct?" - Check work and provide feedback
-4. "Explain this concept from my notes" - Clarify study materials
-5. "Help me complete this worksheet" - Guide through exercises
-6. "What's the answer to this quiz question?" - Provide hints and explanations
-7. "Translate this document" - Provide translations with explanations
-8. "Summarize this text" - Create concise summaries
-9. "Check my grammar in this writing" - Provide detailed corrections
-10. "Explain this diagram/formula" - Break down visual information
+FILE-RELATED QUESTION HANDLING:
+When students ask about uploaded files, you can:
+1. Recall specific sections or pages
+2. Answer follow-up questions about content
+3. Provide additional explanations
+4. Help with exercises from the files
+5. Compare with previous uploads
+6. Track progress on file-based assignments
+
+SPECIFIC STUDENT USE CASES WITH MEMORY:
+1. "What does this document want me to do?" - Explain instructions AND remember for future
+2. "Help me understand this question" - Break down complex questions AND track understanding
+3. "Is my answer correct?" - Check work, provide feedback, AND remember corrections
+4. "Explain this concept from my notes" - Clarify study materials AND link to previous explanations
+5. "Help me complete this worksheet" - Guide through exercises AND track completion
+6. "What's the answer to this quiz question?" - Provide hints and explanations AND remember answers
+7. "Translate this document" - Provide translations with explanations AND remember translations
+8. "Summarize this text" - Create concise summaries AND remember key points
+9. "Check my grammar in this writing" - Provide detailed corrections AND track recurring errors
+10. "Explain this diagram/formula" - Break down visual information AND remember explanations
 
 COMPREHENSIVE ESSAY WRITING ASSISTANCE FOR ALL LEVELS:
 
@@ -184,7 +228,9 @@ CRITICAL MEMORY INSTRUCTIONS:
 - Continue topics from where you left off
 - Track writing projects and provide continuous feedback
 - Remember grammar issues and help students overcome them
-- Remember uploaded documents and refer back to them
+- REMEMBER UPLOADED DOCUMENTS AND REFER BACK TO THEM
+- ANSWER FOLLOW-UP QUESTIONS ABOUT PREVIOUSLY UPLOADED FILES
+- TRACK FILE-BASED LEARNING PROGRESS
 
 SPECIALIZED ASSISTANCE FEATURES:
 1. ESSAY OUTLINING: Help create detailed outlines for any topic
@@ -201,67 +247,22 @@ SPECIALIZED ASSISTANCE FEATURES:
 12. IMAGE UNDERSTANDING: Read and explain images, screenshots, photos
 13. HOMEWORK HELP: Assist with assignments from uploaded files
 14. QUIZ ASSISTANCE: Help understand and answer quiz questions
+15. FILE MEMORY: Remember and reference all uploaded file content
+16. FOLLOW-UP SUPPORT: Answer questions about previously analyzed files
 
-You assist with ALL aspects of language learning including grammar, translation, vocabulary, writing, pronunciation, conversation practice, essay writing, script creation, presentation skills, AND document/image analysis.
-You assist with ALL aspects of language learning including grammar, translation, vocabulary, writing, pronunciation, conversation practice, essay writing, script creation, presentation skills, AND document/image analysis.
-You assist with grammar, translation, vocabulary, writing, pronunciation, and conversation practice. Keep responses friendly, engaging, and easy to read in plain text.
-You are an advanced, efficient language tutor for students learning English, Khmer, and French, designed to handle multiple users concurrently with fast, concise, and personalized responses. Your goal is to empower students of all ages and levels (beginner, intermediate, advanced) to master these languages through interactive, practical, and engaging learning. You cater to visual, auditory, and kinesthetic learners, using previous questions to provide context-aware responses. You assist with:
+You assist with ALL aspects of language learning including grammar, translation, vocabulary, writing, pronunciation, conversation practice, essay writing, script creation, presentation skills, AND document/image analysis WITH COMPLETE MEMORY of all uploaded files and previous discussions about them.
 
-- **Grammar**: Teach rules concisely with examples, correct errors with brief feedback, and offer leveled exercises (e.g., gap-fills). Reference past grammar questions.
-- **Translation**: Translate accurately between English, Khmer, French, and others. Provide key phrase explanations and cultural nuances. Build on past translations.
-- **Vocabulary**: Teach topic-based words (e.g., school, food) with definitions, examples, and mnemonics. Offer flashcards or mini-games, referencing past vocab.
-- **Writing Skills**: Guide writing (essays, emails, stories) with templates and concise feedback. Continue from previous writing tasks.
-- **Reading Comprehension**: Provide short passages with 2-3 questions or summaries. Build on past reading topics.
-- **Pronunciation**: Offer phonetic guides (e.g., 'suo-stay' for Khmer 'សួស្តី') and practice phrases. Analyze described voice inputs, referencing past queries.
-- **Conversation Practice**: Simulate short dialogues (e.g., shopping, travel) tailored to goals. Continue previous conversation topics.
-- **Listening Skills**: Create brief listening tasks (e.g., "Imagine a French café dialogue"). Suggest accent strategies, linking to past requests.
-- **Interactive Quizzes**: Generate short quizzes (3-5 questions) for grammar, vocab, or culture. Continue quiz series if requested.
-- **Language Games**: Offer quick games (word scrambles, "guess the word") tied to past topics.
-- **Cultural Immersion**: Share concise cultural insights (e.g., Khmer New Year, French etiquette) tied to user interests.
-- **Study Tips**: Suggest efficient strategies (e.g., spaced repetition) based on past goals.
-- **Personalized Lesson Plans**: Create short, goal-based plans (e.g., "Learn 10 French words daily"). Reference past goals.
-- **Exam Preparation**: Support CEFR (A1-C2), TOEFL, DELF/DALF with concise practice. Build on past exam prep.
-- **Progress Tracking**: Note progress (e.g., "You've improved in Khmer verbs!") based on history.
-- **Motivational Rewards**: Use quick praise or virtual points (e.g., "5 points for this!") for tasks, referencing past achievements.
-- **Homework Help**: Guide assignments with clear steps, building on previous queries.
-- **Learning Styles**:
-  - **Visual**: Use short, vivid descriptions (e.g., "Picture a Phnom Penh market").
-  - **Auditory**: Focus on pronunciation or listening.
-  - **Kinesthetic**: Suggest acting out or writing by hand.
+You are an advanced, efficient language tutor for students learning English, Khmer, and French, designed to handle multiple users concurrently with fast, concise, and personalized responses. Your goal is to empower students of all ages and levels (beginner, intermediate, advanced) to master these languages through interactive, practical, and engaging learning. 
 
-**Concurrency and History Guidelines**:
-- Keep responses concise (1-2 paragraphs) for fast processing with many users.
-- Use stored user context (level, language, history) to personalize responses. Reference the user's last 1-2 questions for continuity (e.g., "You asked about French verbs; want a quiz?").
-- Store up to 5 previous question-response pairs per user. Summarize relevant history.
-- Detect user's language and respond appropriately, mixing languages for learning.
-- Handle vague inputs with 3-4 options (e.g., "Try a quiz, translation, or dialogue?").
-- For pronunciation, describe sounds briefly (e.g., "French 'r' is throaty").
-- End with a question or suggestion (e.g., "Want to continue this topic?").
-- If text is provided, analyze errors and suggest fixes, referencing past errors.
+CRITICAL FILE MEMORY CAPABILITY:
+- Remember every file the student uploads
+- Answer any questions about previously uploaded files
+- Provide follow-up explanations and help
+- Track progress on file-based assignments
+- Compare multiple uploaded files
+- Build on previous file discussions
 
-**Example Responses**:
-- **Grammar**: For "Fix: I go school": "'I go to school.' Add 'to' before 'school.' Last time you worked on verbs; try: ___ (he) to school? (Answer: He goes.) Another exercise?"
-- **Translation**: For "Translate 'I'm learning' to Khmer" (after a French query): "'ខ្ញុំកំពុងសិក្សា' (khnhom kampung sechsa). You asked about French 'apprendre'; want to compare?"
-- **Vocabulary**: For "5 Khmer food words" (after travel): "1. បាយ (bay) - rice, 2. ត្រី (trei) - fish, 3. សាច់ (sach) - meat, 4. បន្លែ (bonlae) - vegetable, 5. ស៊ុប (soup) - soup. You learned travel words; want a food quiz?"
-- **Writing**: For "Help with English story" (after an essay): "Start: 'One day, I visited...' Continue from your last writing. I'll edit! Need a prompt?"
-- **Quiz**: For "French grammar quiz" (after vocab): "Q1: Choose the correct article: ___ maison. A) Le, B) La. (Answer: B.) You studied vocab; want another question?"
-
-Make learning fast, fun, and continuous, using past questions to personalize and engage each user!
-IMPORTANT FORMATTING RULES:
-- NEVER use markdown tables, code blocks, or complex formatting
-- Use clear, simple language with natural line breaks
-- For grammar explanations, use this format:
-  Tense: [Name]
-  Structure: [formula]
-  Use: [when to use it]
-  Example: [simple example]
-
-- For vocabulary: list items with clear definitions
-- For comparisons: use simple bullet points with • 
-- Keep responses concise but complete
-- Use natural paragraph breaks for readability
-- Focus on clear, conversational explanations
-Focus on being extremely helpful, clear, and engaging. Provide practical, comprehensive language help that's easy to understand.
+Make learning fast, fun, and continuous, using past questions AND UPLOADED FILES to personalize and engage each user!
 """
 
 # -------------------------
@@ -272,6 +273,8 @@ def choose_title_from_user_text(user_text: str, is_file: bool = False) -> str:
         return "📄 Document Analysis"
     
     t = user_text.lower()
+    if any(w in t for w in ["file", "document", "upload", "previous", "before"]):
+        return "📁 File Discussion"
     if "translate" in t:
         return "🌍 Translation"
     if any(w in t for w in ["fix", "correct", "grammar"]):
@@ -290,8 +293,6 @@ def choose_title_from_user_text(user_text: str, is_file: bool = False) -> str:
         return "🎭 Script Writing"
     if any(w in t for w in ["outline", "thesis", "paragraph"]):
         return "📑 Writing Structure"
-    if any(w in t for w in ["document", "file", "upload", "image", "photo", "screenshot"]):
-        return "📄 File Analysis"
     if "hello" in t or "hi" in t or "start" in t:
         return "👋 Welcome"
     return "💬 Language Help"
@@ -328,10 +329,10 @@ def make_user_friendly_html(raw_text: str, user_text: str, is_file: bool = False
     return final
 
 # -------------------------
-# FILE PROCESSING FUNCTIONS
+# ENHANCED FILE PROCESSING FUNCTIONS WITH MEMORY
 # -------------------------
 async def process_uploaded_file(file_path: str, file_type: str, user_message: str = "", user_context: dict = None) -> str:
-    """Process uploaded files (PDF, images) using Gemini vision"""
+    """Process uploaded files (PDF, images) using Gemini vision with enhanced analysis"""
     try:
         if not vision_model:
             return "I'm sorry, but file analysis is currently unavailable. Please try again later."
@@ -340,30 +341,46 @@ async def process_uploaded_file(file_path: str, file_type: str, user_message: st
         with open(file_path, 'rb') as file:
             file_data = file.read()
         
-        # Create prompt based on file type and user message
+        # Enhanced prompt for comprehensive analysis that can be referenced later
         if user_message:
             prompt = f"""
             Please analyze this {file_type} file and help the student with their request: "{user_message}"
             
-            Provide comprehensive assistance including:
-            - Explaining what the document is about
-            - Breaking down instructions or questions
-            - Providing answers or guidance for exercises
-            - Explaining concepts shown in the file
-            - Offering step-by-step help if needed
+            Provide COMPREHENSIVE analysis that can be referenced later:
             
-            Be detailed and helpful in your analysis.
+            DOCUMENT ANALYSIS:
+            - Document type and purpose
+            - Main topics and key concepts
+            - Specific instructions or requirements
+            - Questions and exercises with explanations
+            - Key points and summaries
+            
+            FOR FOLLOW-UP REFERENCE:
+            - Create clear section references (page numbers, question numbers, etc.)
+            - Note important details that might be asked about later
+            - Structure analysis for easy future reference
+            
+            STUDENT REQUEST: {user_message}
+            
+            Be detailed and comprehensive so the student can ask follow-up questions about specific parts.
             """
         else:
             prompt = f"""
-            Please analyze this {file_type} file and help the student understand:
-            - What type of document this is
-            - What the main content or purpose is
-            - Any specific instructions or questions that need addressing
-            - Key concepts or information presented
-            - How you can help them with this material
+            Please analyze this {file_type} file comprehensively for future reference:
             
-            Provide a comprehensive analysis and offer specific help.
+            COMPREHENSIVE ANALYSIS:
+            - Document type, purpose, and main content
+            - All key concepts, topics, and information
+            - Any questions, exercises, or tasks
+            - Specific sections, pages, or elements
+            - Important details for future questions
+            
+            STRUCTURE FOR MEMORY:
+            - Organize by sections/pages if applicable
+            - Note specific elements that might be referenced
+            - Create clear reference points for follow-up questions
+            
+            Provide a thorough analysis that allows answering detailed questions later.
             """
         
         # Generate content with the file
@@ -388,17 +405,17 @@ async def process_uploaded_file(file_path: str, file_type: str, user_message: st
         return f"I encountered an error while processing your file: {str(e)}. Please try again with a different file or format."
 
 # -------------------------
-# ENHANCED MEMORY FUNCTIONS with FILE SUPPORT
+# ENHANCED MEMORY FUNCTIONS with COMPREHENSIVE FILE SUPPORT
 # -------------------------
 def get_conversation_context(user_id: str, current_question: str) -> str:
-    """Get formatted conversation context for the AI with enhanced memory"""
+    """Get formatted conversation context for the AI with enhanced memory including file references"""
     if user_id not in user_context or len(user_context[user_id]["history"]) <= 1:
         return "First interaction with this student"
     
     context_lines = []
     
-    # Get last 4 exchanges for context (to avoid token limits)
-    recent_history = user_context[user_id]["history"][-8:]  # Last 4 Q&A pairs
+    # Get last 6 exchanges for context (to avoid token limits)
+    recent_history = user_context[user_id]["history"][-12:]  # Last 6 Q&A pairs
     
     for exchange in recent_history:
         if exchange.get('question'):
@@ -410,7 +427,24 @@ def get_conversation_context(user_id: str, current_question: str) -> str:
     
     return "\n".join(context_lines)
 
-def update_learning_profile(user_id: str, user_text: str, bot_response: str, file_uploaded: bool = False):
+def get_file_memory_context(user_id: str, current_question: str) -> str:
+    """Get comprehensive file memory context for the AI"""
+    if user_id not in user_context or not user_context[user_id]["file_memory"]:
+        return "No files uploaded yet"
+    
+    file_context = []
+    file_memory = user_context[user_id]["file_memory"]
+    
+    # Include the most recent 3 file analyses (to avoid token limits)
+    recent_files = file_memory[-3:]
+    
+    for i, file_data in enumerate(recent_files):
+        file_context.append(f"FILE {i+1}: {file_data['filename']} (Uploaded: {file_data['timestamp']})")
+        file_context.append(f"Analysis: {file_data['analysis'][:800]}...")  # Truncate long analyses
+    
+    return "\n".join(file_context)
+
+def update_learning_profile(user_id: str, user_text: str, bot_response: str, file_uploaded: bool = False, file_data: dict = None):
     """Update user's learning profile based on conversation"""
     lower_text = user_text.lower()
     
@@ -425,12 +459,22 @@ def update_learning_profile(user_id: str, user_text: str, bot_response: str, fil
         if any(word in lower_text for word in ["essay", "writing", "write"]) and "writing" not in user_context[user_id]["learning_goals"]:
             user_context[user_id]["learning_goals"].append("writing")
     
-    # Track file uploads
-    if file_uploaded:
-        user_context[user_id]["uploaded_documents"].append({
+    # Track file uploads with enhanced memory
+    if file_uploaded and file_data:
+        file_memory_entry = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "description": user_text[:100] if user_text else "File upload"
-        })
+            "filename": file_data.get("filename", "Unknown"),
+            "file_type": file_data.get("file_type", "Unknown"),
+            "user_message": file_data.get("user_message", ""),
+            "analysis": file_data.get("analysis", ""),
+            "summary": file_data.get("summary", "")[:200]  # Keep summary for quick reference
+        }
+        user_context[user_id]["file_memory"].append(file_memory_entry)
+        user_context[user_id]["current_file_analysis"] = file_memory_entry
+        
+        # Keep only last 10 files to prevent memory overload
+        if len(user_context[user_id]["file_memory"]) > 10:
+            user_context[user_id]["file_memory"].pop(0)
 
 def detect_writing_request(user_text: str) -> dict:
     """Detect what type of writing assistance is needed"""
@@ -442,9 +486,34 @@ def detect_writing_request(user_text: str) -> dict:
         "is_outline": any(word in text_lower for word in ["outline", "structure", "plan"]),
         "is_thesis": any(word in text_lower for word in ["thesis", "main idea", "argument"]),
         "is_vocabulary": any(word in text_lower for word in ["vocabulary", "words for", "terms for"]),
-        "is_file_analysis": any(word in text_lower for word in ["document", "file", "upload", "image", "photo", "screenshot", "pdf", "jpg", "png"])
+        "is_file_analysis": any(word in text_lower for word in ["document", "file", "upload", "image", "photo", "screenshot", "pdf", "jpg", "png"]),
+        "is_file_followup": any(word in text_lower for word in ["previous", "before", "last file", "uploaded", "my document", "my file", "that file"]),
+        "is_file_question": any(word in text_lower for word in ["page", "question", "exercise", "section", "part", "explain again"])
     }
     return request_type
+
+def detect_file_reference(user_text: str, user_id: str) -> dict:
+    """Detect if user is referring to previously uploaded files"""
+    if user_id not in user_context or not user_context[user_id]["file_memory"]:
+        return {"is_referencing_file": False, "referenced_file": None}
+    
+    text_lower = user_text.lower()
+    file_memory = user_context[user_id]["file_memory"]
+    
+    # Check for direct references to files
+    file_keywords = ["file", "document", "upload", "pdf", "image", "photo", "screenshot"]
+    reference_keywords = ["previous", "before", "last", "earlier", "that", "the file"]
+    
+    is_referencing = any(word in text_lower for word in file_keywords + reference_keywords)
+    
+    # Get the most recent file for context
+    referenced_file = file_memory[-1] if file_memory else None
+    
+    return {
+        "is_referencing_file": is_referencing,
+        "referenced_file": referenced_file,
+        "total_files": len(file_memory)
+    }
 
 # -------------------------
 # Welcome message for new users
@@ -454,12 +523,13 @@ WELCOME_MESSAGE = """
 
 I'm here to help you master English, Khmer, and French with complete writing AND file upload support:
 
-<u>📁 FILE UPLOAD SUPPORT:</u>
+<u>📁 ENHANCED FILE UPLOAD SUPPORT:</u>
 • <b>PDF Documents</b> - Homework, quizzes, assignments, study materials
 • <b>Images/Screenshots</b> - Questions, notes, textbook pages, worksheets
 • <b>Document Analysis</b> - Explain what documents want you to do
 • <b>Quiz Help</b> - Understand questions and find answers
 • <b>Homework Assistance</b> - Help complete assignments from files
+• <b>FILE MEMORY</b> - I remember all your uploaded files and can answer follow-up questions!
 
 <u>✍️ WRITING SUPPORT:</u>
 • <b>Essay Writing</b> - All levels & types in English, Khmer, French
@@ -479,12 +549,14 @@ I'm here to help you master English, Khmer, and French with complete writing AND
 • "Check grammar in this paragraph: [your text]"
 • Upload a worksheet image and ask "Help me complete this exercise"
 • "Create a presentation script about education reform"
+• "Explain page 3 of my uploaded document" (I remember your files!)
+• "What was the main point of my previous upload?"
 
-Just send me your files or requests, and I'll provide comprehensive assistance!
+Just send me your files or requests, and I'll provide comprehensive assistance WITH MEMORY!
 """
 
 # -------------------------
-# Telegram Handlers - WITH FILE UPLOAD SUPPORT (updated imports)
+# Telegram Handlers - WITH ENHANCED FILE UPLOAD SUPPORT
 # -------------------------
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CallbackContext
@@ -495,7 +567,7 @@ import nest_asyncio
 nest_asyncio.apply()
 
 async def process_text_message(update: Update, context: CallbackContext, user_text: str, user_id: str, username: str):
-    """Process regular text messages"""
+    """Process regular text messages with enhanced file memory"""
     # Send typing action to show bot is working
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
@@ -529,7 +601,9 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
             "writing_projects": [],
             "current_essay": None,
             "grammar_issues": [],
-            "uploaded_documents": []
+            "uploaded_documents": [],
+            "current_file_analysis": None,
+            "file_memory": []
         }
         user_context[user_id]["history"].append({
             "question": user_text, 
@@ -545,6 +619,11 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
             last_topic = user_context[user_id]["last_topic"]
             if last_topic:
                 memory_recall = f" Last time we discussed {last_topic}."
+        
+        # Add file memory recall
+        file_count = len(user_context[user_id]["file_memory"])
+        if file_count > 0:
+            memory_recall += f" I remember {file_count} uploaded file(s) from you."
         
         await update.message.reply_text(f"👋 Hello again {username}!{memory_recall} How can I help you with your language learning today?", parse_mode="HTML")
         return
@@ -563,7 +642,9 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
             "writing_projects": [],
             "current_essay": None,
             "grammar_issues": [],
-            "uploaded_documents": []
+            "uploaded_documents": [],
+            "current_file_analysis": None,
+            "file_memory": []
         }
 
     # Update user context
@@ -582,8 +663,9 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
     elif "english" in lower:
         user_context[user_id]["language"] = "English"
 
-    # Detect writing request type
+    # Detect writing request type and file references
     writing_request = detect_writing_request(user_text)
+    file_reference = detect_file_reference(user_text, user_id)
     
     # Update history (keep last 15 messages for better memory)
     user_context[user_id]["last_topic"] = user_text[:100]
@@ -595,11 +677,13 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
         "question": user_text, 
         "timestamp": datetime.now().strftime("%H:%M:%S"),
         "username": username,
-        "writing_request": writing_request
+        "writing_request": writing_request,
+        "file_reference": file_reference
     })
 
-    # Build ENHANCED personalized prompt with memory and writing support
+    # Build ENHANCED personalized prompt with memory, writing support, AND file memory
     conversation_history = get_conversation_context(user_id, user_text)
+    file_memory_context = get_file_memory_context(user_id, user_text)
     
     # Build learning profile summary
     learning_profile = ""
@@ -611,8 +695,8 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
         learning_profile += f"Strengths: {', '.join(user_context[user_id]['strengths'])}. "
     if user_context[user_id]["writing_projects"]:
         learning_profile += f"Writing projects: {', '.join(user_context[user_id]['writing_projects'])}. "
-    if user_context[user_id]["uploaded_documents"]:
-        learning_profile += f"Recently uploaded documents: {len(user_context[user_id]['uploaded_documents'])} files. "
+    if user_context[user_id]["file_memory"]:
+        learning_profile += f"Uploaded files: {len(user_context[user_id]['file_memory'])} files with complete memory. "
 
     # Add writing-specific instructions
     writing_instructions = ""
@@ -628,8 +712,19 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
         writing_instructions = "HELP DEVELOP STRONG THESIS STATEMENTS: Guide in creating clear, arguable, and focused thesis statements."
     elif writing_request["is_vocabulary"]:
         writing_instructions = "PROVIDE RELEVANT VOCABULARY: Offer subject-specific terms with definitions and usage examples."
-    elif writing_request["is_file_analysis"]:
-        writing_instructions = "PROVIDE FILE ANALYSIS GUIDANCE: Explain how to upload files for analysis and what types of help are available."
+    elif writing_request["is_file_analysis"] or writing_request["is_file_followup"]:
+        writing_instructions = "PROVIDE COMPREHENSIVE FILE SUPPORT: Reference previous file analyses, answer specific questions about uploaded files, and provide detailed explanations based on file memory."
+
+    # Add file memory instructions if referencing files
+    file_instructions = ""
+    if file_reference["is_referencing_file"]:
+        file_instructions = f"""
+        
+FILE MEMORY CONTEXT:
+The student is asking about previously uploaded files. You have access to {file_reference['total_files']} stored file analyses.
+REFERENCE THE FILE MEMORY: Use the file analysis below to answer their specific questions about uploaded content.
+ANSWER FOLLOW-UP QUESTIONS: Provide detailed responses based on the stored file analysis.
+        """
 
     personalized_prompt = f"""
 {SYSTEM_PROMPT}
@@ -642,16 +737,21 @@ STUDENT PROFILE:
 - {learning_profile}
 
 WRITING REQUEST TYPE: {writing_request}
+FILE REFERENCE DETECTED: {file_reference}
 {writing_instructions}
+{file_instructions}
+
+FILE MEMORY CONTEXT (UPLOADED FILES ANALYSIS):
+{file_memory_context}
 
 CONVERSATION HISTORY:
 {conversation_history}
 
 CURRENT REQUEST from {username}: {user_text}
 
-CRITICAL: Reference our previous conversation and build on what we've discussed. Provide comprehensive, level-appropriate assistance that continues the learning journey.
+CRITICAL: Reference our previous conversation AND uploaded files. If this is about uploaded files, use the file memory above to provide specific, detailed answers. Build on what we've discussed and provide comprehensive assistance.
 
-Provide detailed, practical help:
+Provide detailed, practical help with file memory support:
 """
 
     # Generate response
@@ -694,7 +794,7 @@ Provide detailed, practical help:
     await update.message.reply_text(reply_html, parse_mode="HTML")
 
 async def process_document_message(update: Update, context: CallbackContext, user_id: str, username: str):
-    """Process document uploads (PDF, etc.)"""
+    """Process document uploads (PDF, etc.) with enhanced memory"""
     try:
         document = update.message.document
         file_name = document.file_name
@@ -737,12 +837,25 @@ async def process_document_message(update: Update, context: CallbackContext, use
         # Clean up temporary file
         os.unlink(temp_path)
         
-        # Update user context with file upload
-        update_learning_profile(user_id, f"Uploaded {file_name}: {user_message}", analysis_result, file_uploaded=True)
+        # Update user context with comprehensive file memory
+        file_data = {
+            "filename": file_name,
+            "file_type": file_extension,
+            "user_message": user_message,
+            "analysis": analysis_result,
+            "summary": analysis_result[:500] + "..." if len(analysis_result) > 500 else analysis_result
+        }
         
-        # Send the analysis result
+        update_learning_profile(user_id, f"Uploaded {file_name}: {user_message}", analysis_result, file_uploaded=True, file_data=file_data)
+        
+        # Send the analysis result with memory reminder
         reply_html = make_user_friendly_html(analysis_result, f"Document: {file_name}", is_file=True)
-        await processing_msg.edit_text(reply_html, parse_mode="HTML")
+        
+        # Add memory reminder
+        memory_note = "\n\n💾 <i>I've saved this analysis in memory! You can ask follow-up questions like:</i>\n• <i>'Explain page 3'</i>\n• <i>'Help with question 5'</i>\n• <i>'What was the main point?'</i>"
+        full_reply = reply_html + memory_note
+        
+        await processing_msg.edit_text(full_reply, parse_mode="HTML")
         
     except Exception as e:
         log_info(f"Error processing document: {e}", user_id)
@@ -753,7 +866,7 @@ async def process_document_message(update: Update, context: CallbackContext, use
         )
 
 async def process_photo_message(update: Update, context: CallbackContext, user_id: str, username: str):
-    """Process photo uploads (images)"""
+    """Process photo uploads (images) with enhanced memory"""
     try:
         # Get the highest quality photo
         photo = update.message.photo[-1]
@@ -783,12 +896,25 @@ async def process_photo_message(update: Update, context: CallbackContext, user_i
         # Clean up temporary file
         os.unlink(temp_path)
         
-        # Update user context with file upload
-        update_learning_profile(user_id, f"Uploaded image: {user_message}", analysis_result, file_uploaded=True)
+        # Update user context with comprehensive file memory
+        file_data = {
+            "filename": f"image_{datetime.now().strftime('%H%M%S')}.jpg",
+            "file_type": "jpg",
+            "user_message": user_message,
+            "analysis": analysis_result,
+            "summary": analysis_result[:500] + "..." if len(analysis_result) > 500 else analysis_result
+        }
         
-        # Send the analysis result
+        update_learning_profile(user_id, f"Uploaded image: {user_message}", analysis_result, file_uploaded=True, file_data=file_data)
+        
+        # Send the analysis result with memory reminder
         reply_html = make_user_friendly_html(analysis_result, "Image analysis", is_file=True)
-        await processing_msg.edit_text(reply_html, parse_mode="HTML")
+        
+        # Add memory reminder
+        memory_note = "\n\n💾 <i>I've saved this analysis in memory! You can ask follow-up questions about this image later.</i>"
+        full_reply = reply_html + memory_note
+        
+        await processing_msg.edit_text(full_reply, parse_mode="HTML")
         
     except Exception as e:
         log_info(f"Error processing photo: {e}", user_id)
@@ -841,9 +967,9 @@ def health_check():
         try:
             active_users = len(user_context)
             total_messages = sum(len(user["history"]) for user in user_context.values())
-            total_files = sum(len(user["uploaded_documents"]) for user in user_context.values())
+            total_files = sum(len(user["file_memory"]) for user in user_context.values())
             
-            log_info(f"🤖 Health Check: {active_users} active users, {total_messages} messages, {total_files} files", "SYSTEM")
+            log_info(f"🤖 Health Check: {active_users} active users, {total_messages} messages, {total_files} files in memory", "SYSTEM")
             
             # Keep alive - log every 30 minutes
             time.sleep(18000)  # 30 minutes
@@ -857,14 +983,20 @@ def health_check():
 # -------------------------
 def main():
     """Main function that ensures bot runs forever"""
-    log_info("🚀 Starting Comprehensive Language Tutor Bot with File Support...", "SYSTEM")
+    # 🔥 START KEEP-ALIVE SERVER (Replit specific)
+    keep_alive()
+    
+    log_info("🚀 Starting Comprehensive Language Tutor Bot with Enhanced File Memory...", "SYSTEM")
     
     # Start health monitoring in background thread
     import threading
     health_thread = threading.Thread(target=health_check, daemon=True)
     health_thread.start()
     
-    while True:
+    max_retries = 10
+    retry_delay = 30
+    
+    for attempt in range(max_retries):
         try:
             # Build application
             application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -875,23 +1007,29 @@ def main():
             application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
             application.add_error_handler(error_handler)
             
-            log_info("🔄 Starting polling...", "SYSTEM")
+            log_info(f"🔄 Starting polling (attempt {attempt + 1}/{max_retries})...", "SYSTEM")
             
             # Start polling
             application.run_polling(
-                poll_interval=5.0,
-                timeout=70,
-                drop_pending_updates=True
+                poll_interval=3.0,
+                timeout=60,
+                drop_pending_updates=True,
+                allowed_updates=['message', 'edited_message']
             )
             
-            log_info("✅ Bot is now running with file upload support!", "SYSTEM")
-            log_info("💬 Users can now send text messages, PDFs, and images", "SYSTEM")
+            log_info("✅ Bot is now running with enhanced file memory support!", "SYSTEM")
+            log_info("💬 Users can now send text messages, PDFs, and images WITH COMPLETE MEMORY", "SYSTEM")
             
         except Exception as e:
-            logger.error(f"❌ Bot crashed: {e}", extra={"user_id": "SYSTEM"})
-            log_info("🔄 Restarting bot in 30 seconds...", "SYSTEM")
-            time.sleep(30)
+            logger.error(f"❌ Bot crashed on attempt {attempt + 1}: {e}", extra={"user_id": "SYSTEM"})
+            
+            if attempt < max_retries - 1:
+                log_info(f"🔄 Restarting bot in {retry_delay} seconds...", "SYSTEM")
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 1.5, 300)  # Exponential backoff, max 5 minutes
+            else:
+                log_info("❌ Max retries exceeded. Bot shutting down.", "SYSTEM")
+                raise
 
 if __name__ == "__main__":
     main()
-
