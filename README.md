@@ -32,12 +32,6 @@ A powerful Telegram bot designed to help students master English, Khmer, and Fre
 - **Personalized learning**: Tracks progress, strengths, weaknesses, and learning goals
 - **Context-aware responses**: References previous discussions and uploaded content
 
-## 🚀 Quick Start
-
-### Prerequisites
-- Python 3.8+
-- Telegram Bot Token (from [@BotFather](https://t.me/botfather))
-- Google Gemini API Key (from [Google AI Studio](https://makersuite.google.com/app/apikey))
 
 
 
