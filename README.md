@@ -41,25 +41,8 @@ A powerful Telegram bot designed to help students master English, Khmer, and Fre
 
 
 
-1. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
 
-2. **Configure environment variables**
 
-   Create a `.env` file in the root directory:
-   ```
-   TELEGRAM_TOKEN=your_telegram_bot_token_here
-   GEMINI_API_KEY=your_gemini_api_key_here
-   ```
-
-3. **Run the bot**
-   ```bash
-   python bot.py
-   ```
-
-## 📖 Usage Examples
 
 ### Getting Started
 Send `/start` or "hello" to begin your learning journey!
@@ -84,15 +67,7 @@ Send `/start` or "hello" to begin your learning journey!
 - "What was the main point of my previous upload?"
 - "Help me answer question 5 from my homework"
 
-## 🛠️ Technical Details
 
-### Dependencies
-- `python-telegram-bot==21.4` - Telegram Bot API wrapper
-- `google-generativeai==0.8.3` - Google Gemini AI integration
-- `nest-asyncio==1.6.0` - Asyncio compatibility
-- `python-dotenv==1.0.1` - Environment variable management
-- `flask==3.0.2` - Keep-alive server for Replit
-- `pillow==10.3.0` - Image processing support
 
 ### Architecture
 - **Asynchronous processing** for handling multiple users concurrently
@@ -140,27 +115,13 @@ Send `/start` or "hello" to begin your learning journey!
 | Image uploads | Screenshot analysis and worksheet help |
 | Follow-up questions | Reference previous uploads and discussions |
 
-## 🔧 Configuration
-
-### Environment Variables
-- `TELEGRAM_TOKEN`: Your Telegram bot token from BotFather
-- `GEMINI_API_KEY`: Your Google Gemini API key
 
 ### Optional Configuration
 - Bot automatically detects user language preferences
 - Adjusts difficulty level based on user feedback
 - Maintains conversation history for personalized responses
 
-## 🚀 Deployment
 
-### Replit Deployment
-The bot includes a keep-alive server specifically for Replit deployment to prevent sleeping.
-
-### Local Development
-Run the bot locally for development and testing:
-```bash
-python bot.py
-```
 
 ### Production Deployment
 - Set up proper environment variables
