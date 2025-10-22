@@ -110,25 +110,7 @@ Send `/start` or "hello" to begin your learning journey!
 | Follow-up questions | Reference previous uploads and discussions |
 
 
-### Optional Configuration
-- Bot automatically detects user language preferences
-- Adjusts difficulty level based on user feedback
-- Maintains conversation history for personalized responses
 
-
-
-### Production Deployment
-- Set up proper environment variables
-- Configure logging and monitoring
-- Set up automatic restarts on failure
-
-## 📊 Monitoring
-
-The bot includes built-in health monitoring that tracks:
-- Active users count
-- Total messages processed
-- Files stored in memory
-- System performance metrics
 
 
 
