@@ -102,8 +102,8 @@ try:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
     # Use a model that supports vision
-    model = genai.GenerativeModel("gemini-2.5-flash")
-    vision_model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("")
+    vision_model = genai.GenerativeModel("")
     log_info("Gemini configured successfully with vision support", "N/A")
 except Exception as e:
     log_info(f"Gemini configuration failed: {e}", "N/A")
@@ -1121,4 +1121,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
