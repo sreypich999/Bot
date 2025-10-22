@@ -39,20 +39,14 @@ A powerful Telegram bot designed to help students master English, Khmer, and Fre
 - Telegram Bot Token (from [@BotFather](https://t.me/botfather))
 - Google Gemini API Key (from [Google AI Studio](https://makersuite.google.com/app/apikey))
 
-### Installation
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd language-tutor-bot
-   ```
 
-2. **Install dependencies**
+1. **Install dependencies**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Configure environment variables**
+2. **Configure environment variables**
 
    Create a `.env` file in the root directory:
    ```
@@ -60,7 +54,7 @@ A powerful Telegram bot designed to help students master English, Khmer, and Fre
    GEMINI_API_KEY=your_gemini_api_key_here
    ```
 
-4. **Run the bot**
+3. **Run the bot**
    ```bash
    python bot.py
    ```
