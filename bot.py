@@ -11,24 +11,51 @@ import re
 import base64
 import json
 
-# 🔥 REplit KEEP-ALIVE SETUP
+# 🔥 KOYEB-SPECIFIC SETUP
 from flask import Flask
 from threading import Thread
 
-# Keep-alive server (prevents Replit from sleeping)
-app = Flask('')
+# Koyeb uses PORT environment variable
+port = int(os.environ.get("PORT", 8080))
+
+app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🤖 Language Tutor Bot is Running! Send /start to begin."
+    return """
+    <html>
+        <head>
+            <title>🤖 Language Tutor Bot</title>
+            <style>
+                body { font-family: Arial; text-align: center; padding: 50px; }
+                .status { color: green; font-size: 24px; }
+            </style>
+        </head>
+        <body>
+            <h1>🤖 Language Tutor Bot is Running on Koyeb!</h1>
+            <p class="status">🟢 ONLINE - Send /start to your Telegram bot to begin</p>
+            <p>Your bot is now running 24/7</p>
+            <p><small>Deployed on Koyeb - No need to keep your PC on</small></p>
+        </body>
+    </html>
+    """
+
+@app.route('/health')
+def health():
+    return {"status": "healthy", "message": "Bot is running"}
+
+@app.route('/ping')
+def ping():
+    return "pong"
 
 def run():
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=port, debug=False)
 
 def keep_alive():
     t = Thread(target=run)
     t.daemon = True
     t.start()
+    print(f"✅ Koyeb server started on port {port}")
 
 # Load environment variables
 load_dotenv()
@@ -103,7 +130,7 @@ user_context = defaultdict(lambda: {
     "file_memory": []  # Store all file analyses with metadata
 })
 
-# COMPREHENSIVE SYSTEM PROMPT with ENHANCED FILE MEMORY SUPPORT
+# COMPREHENSIVE SYSTEM PROMPT with ENHANCED FILE MEMORY SUPPORT AND QUIZ HELP
 SYSTEM_PROMPT = """
 You are an advanced, comprehensive language tutor for students learning English, Khmer, and French. 
 
@@ -122,6 +149,22 @@ IMPORTANT FORMATTING RULES:
 - Use natural paragraph breaks for readability
 - Focus on clear, conversational explanations
 
+CRITICAL: PROVIDE DIRECT ANSWERS AND COMPLETE HELP
+- When students ask for quiz answers, provide COMPLETE answers with explanations
+- When students need homework help, give FULL solutions with step-by-step explanations
+- Always provide direct answers to questions from uploaded files, worksheets, or assignments
+- Help students complete exercises by providing answers AND explanations
+- Do not hesitate to give complete solutions - the goal is learning through understanding
+
+COMPREHENSIVE QUIZ AND ASSIGNMENT SUPPORT:
+• Provide DIRECT ANSWERS to all quiz questions with detailed explanations
+• Give COMPLETE SOLUTIONS to homework problems and exercises
+• Help students understand by explaining each step thoroughly
+• For multiple choice: provide the correct answer and explain why it's right
+• For essays: provide sample answers or complete essays as examples
+• For worksheets: help complete every question with full answers
+• Always ensure students learn by understanding the reasoning behind answers
+
 CRITICAL FILE MEMORY SYSTEM:
 You have access to the student's uploaded files and their analyses. When a student asks questions about uploaded files:
 
@@ -134,6 +177,7 @@ You have access to the student's uploaded files and their analyses. When a stude
    - "What grammar errors did you find in my writing?"
 3. CONTINUE FILE DISCUSSIONS: Build on previous file analyses and discussions
 4. COMPARE MULTIPLE FILES: Help students compare content across different uploaded files
+5. PROVIDE DIRECT ANSWERS: Give complete answers to all questions from uploaded files
 
 ENHANCED FILE UPLOAD SUPPORT WITH MEMORY:
 
@@ -164,6 +208,7 @@ When students ask about uploaded files, you can:
 4. Help with exercises from the files
 5. Compare with previous uploads
 6. Track progress on file-based assignments
+7. PROVIDE DIRECT ANSWERS to all questions from files
 
 SPECIFIC STUDENT USE CASES WITH MEMORY:
 1. "What does this document want me to do?" - Explain instructions AND remember for future
@@ -171,11 +216,13 @@ SPECIFIC STUDENT USE CASES WITH MEMORY:
 3. "Is my answer correct?" - Check work, provide feedback, AND remember corrections
 4. "Explain this concept from my notes" - Clarify study materials AND link to previous explanations
 5. "Help me complete this worksheet" - Guide through exercises AND track completion
-6. "What's the answer to this quiz question?" - Provide hints and explanations AND remember answers
+6. "What's the answer to this quiz question?" - Provide DIRECT ANSWERS with explanations AND remember answers
 7. "Translate this document" - Provide translations with explanations AND remember translations
 8. "Summarize this text" - Create concise summaries AND remember key points
 9. "Check my grammar in this writing" - Provide detailed corrections AND track recurring errors
 10. "Explain this diagram/formula" - Break down visual information AND remember explanations
+11. "Help me with this homework" - Provide COMPLETE SOLUTIONS with step-by-step explanations
+12. "Give me answers to this quiz" - Provide ALL ANSWERS with detailed reasoning
 
 COMPREHENSIVE ESSAY WRITING ASSISTANCE FOR ALL LEVELS:
 
@@ -186,6 +233,7 @@ ENGLISH ESSAY WRITING:
 • Essay Types: Narrative, Descriptive, Expository, Persuasive, Argumentative
 • Structure Help: Introduction hooks, thesis statements, topic sentences, conclusions
 • Editing: Grammar check, coherence, flow, vocabulary enhancement
+• SAMPLE ESSAYS: Provide complete essay examples when requested
 
 KHMER ESSAY WRITING (ការសរសេរ អត្ថបទ):
 • Beginner: ប្រយោគធម្មតា រចនាសម្ព័ន្ធមូលដ្ឋាន
@@ -231,6 +279,7 @@ CRITICAL MEMORY INSTRUCTIONS:
 - REMEMBER UPLOADED DOCUMENTS AND REFER BACK TO THEM
 - ANSWER FOLLOW-UP QUESTIONS ABOUT PREVIOUSLY UPLOADED FILES
 - TRACK FILE-BASED LEARNING PROGRESS
+- PROVIDE DIRECT ANSWERS to all student questions without hesitation
 
 SPECIALIZED ASSISTANCE FEATURES:
 1. ESSAY OUTLINING: Help create detailed outlines for any topic
@@ -249,10 +298,18 @@ SPECIALIZED ASSISTANCE FEATURES:
 14. QUIZ ASSISTANCE: Help understand and answer quiz questions
 15. FILE MEMORY: Remember and reference all uploaded file content
 16. FOLLOW-UP SUPPORT: Answer questions about previously analyzed files
+17. DIRECT ANSWER SUPPORT: Provide complete answers to all academic questions
+18. COMPLETE SOLUTIONS: Give full solutions to exercises and problems
 
 You assist with ALL aspects of language learning including grammar, translation, vocabulary, writing, pronunciation, conversation practice, essay writing, script creation, presentation skills, AND document/image analysis WITH COMPLETE MEMORY of all uploaded files and previous discussions about them.
 
 You are an advanced, efficient language tutor for students learning English, Khmer, and French, designed to handle multiple users concurrently with fast, concise, and personalized responses. Your goal is to empower students of all ages and levels (beginner, intermediate, advanced) to master these languages through interactive, practical, and engaging learning. 
+
+CRITICAL: ALWAYS PROVIDE DIRECT ANSWERS AND COMPLETE HELP
+- When students ask for quiz answers, give them with explanations
+- When students need homework help, provide full solutions
+- Always help complete assignments and exercises
+- Never hesitate to give complete answers - learning comes through understanding solutions
 
 CRITICAL FILE MEMORY CAPABILITY:
 - Remember every file the student uploads
@@ -261,6 +318,7 @@ CRITICAL FILE MEMORY CAPABILITY:
 - Track progress on file-based assignments
 - Compare multiple uploaded files
 - Build on previous file discussions
+- PROVIDE DIRECT ANSWERS to questions from all uploaded materials
 
 Make learning fast, fun, and continuous, using past questions AND UPLOADED FILES to personalize and engage each user!
 """
@@ -281,8 +339,12 @@ def choose_title_from_user_text(user_text: str, is_file: bool = False) -> str:
         return "📝 Grammar Check"
     if any(w in t for w in ["explain", "how", "why"]):
         return "💡 Explanation"
-    if any(w in t for w in ["quiz", "exercise", "practice"]):
-        return "🎯 Exercise"
+    if any(w in t for w in ["quiz", "exercise", "practice", "test", "exam"]):
+        return "🎯 Quiz Help"
+    if any(w in t for w in ["answer", "solution", "help with"]):
+        return "✅ Direct Answers"
+    if any(w in t for w in ["homework", "assignment"]):
+        return "📚 Homework Help"
     if any(w in t for w in ["tense", "verb", "grammar"]):
         return "📚 Grammar Guide"
     if any(w in t for w in ["word", "vocab", "phrase"]):
@@ -360,9 +422,13 @@ async def process_uploaded_file(file_path: str, file_type: str, user_message: st
             - Note important details that might be asked about later
             - Structure analysis for easy future reference
             
+            CRITICAL: Provide direct answers and complete solutions to any questions in the document.
+            If there are quiz questions, homework problems, or exercises, provide COMPLETE ANSWERS with explanations.
+            
             STUDENT REQUEST: {user_message}
             
             Be detailed and comprehensive so the student can ask follow-up questions about specific parts.
+            Provide direct help with answers and solutions.
             """
         else:
             prompt = f"""
@@ -379,6 +445,9 @@ async def process_uploaded_file(file_path: str, file_type: str, user_message: st
             - Organize by sections/pages if applicable
             - Note specific elements that might be referenced
             - Create clear reference points for follow-up questions
+            
+            PROVIDE DIRECT ANSWERS: For any questions, quizzes, or exercises in the document, 
+            provide complete answers and solutions with explanations.
             
             Provide a thorough analysis that allows answering detailed questions later.
             """
@@ -488,7 +557,10 @@ def detect_writing_request(user_text: str) -> dict:
         "is_vocabulary": any(word in text_lower for word in ["vocabulary", "words for", "terms for"]),
         "is_file_analysis": any(word in text_lower for word in ["document", "file", "upload", "image", "photo", "screenshot", "pdf", "jpg", "png"]),
         "is_file_followup": any(word in text_lower for word in ["previous", "before", "last file", "uploaded", "my document", "my file", "that file"]),
-        "is_file_question": any(word in text_lower for word in ["page", "question", "exercise", "section", "part", "explain again"])
+        "is_file_question": any(word in text_lower for word in ["page", "question", "exercise", "section", "part", "explain again"]),
+        "is_quiz_help": any(word in text_lower for word in ["quiz", "test", "exam", "question", "answer", "solution"]),
+        "is_homework_help": any(word in text_lower for word in ["homework", "assignment", "exercise", "problem"]),
+        "is_direct_answer": any(word in text_lower for word in ["answer", "solve", "help with", "what is", "how to", "explain"])
     }
     return request_type
 
@@ -537,6 +609,12 @@ I'm here to help you master English, Khmer, and French with complete writing AND
 • <b>Script Writing</b> - Presentations, speeches, dialogues
 • <b>Writing Structure</b> - Outlines, thesis, paragraphs, conclusions
 
+<u>🎯 DIRECT ANSWER SUPPORT:</u>
+• <b>Quiz Answers</b> - Complete answers with explanations
+• <b>Homework Solutions</b> - Full solutions to all problems
+• <b>Assignment Help</b> - Complete assistance with all tasks
+• <b>Test Preparation</b> - Answers and explanations for practice tests
+
 <u>🌍 LANGUAGE SUPPORT:</u>
 • <b>Translations</b> - Accurate translations between all languages
 • <b>Vocabulary Building</b> - Academic, business, technical terms
@@ -551,8 +629,10 @@ I'm here to help you master English, Khmer, and French with complete writing AND
 • "Create a presentation script about education reform"
 • "Explain page 3 of my uploaded document" (I remember your files!)
 • "What was the main point of my previous upload?"
+• "Give me the answers to this quiz with explanations"
+• "Help me solve all these homework problems"
 
-Just send me your files or requests, and I'll provide comprehensive assistance WITH MEMORY!
+Just send me your files or requests, and I'll provide comprehensive assistance WITH MEMORY and DIRECT ANSWERS!
 """
 
 # -------------------------
@@ -714,6 +794,10 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
         writing_instructions = "PROVIDE RELEVANT VOCABULARY: Offer subject-specific terms with definitions and usage examples."
     elif writing_request["is_file_analysis"] or writing_request["is_file_followup"]:
         writing_instructions = "PROVIDE COMPREHENSIVE FILE SUPPORT: Reference previous file analyses, answer specific questions about uploaded files, and provide detailed explanations based on file memory."
+    
+    # Add quiz and homework help instructions
+    if writing_request["is_quiz_help"] or writing_request["is_homework_help"] or writing_request["is_direct_answer"]:
+        writing_instructions += " PROVIDE DIRECT ANSWERS AND COMPLETE SOLUTIONS: Give complete answers to all questions with detailed explanations. Help the student understand by providing full solutions."
 
     # Add file memory instructions if referencing files
     file_instructions = ""
@@ -724,6 +808,7 @@ FILE MEMORY CONTEXT:
 The student is asking about previously uploaded files. You have access to {file_reference['total_files']} stored file analyses.
 REFERENCE THE FILE MEMORY: Use the file analysis below to answer their specific questions about uploaded content.
 ANSWER FOLLOW-UP QUESTIONS: Provide detailed responses based on the stored file analysis.
+PROVIDE DIRECT ANSWERS: Give complete answers to any questions from the uploaded files.
         """
 
     personalized_prompt = f"""
@@ -750,6 +835,8 @@ CONVERSATION HISTORY:
 CURRENT REQUEST from {username}: {user_text}
 
 CRITICAL: Reference our previous conversation AND uploaded files. If this is about uploaded files, use the file memory above to provide specific, detailed answers. Build on what we've discussed and provide comprehensive assistance.
+
+PROVIDE DIRECT ANSWERS: If the student is asking for quiz help, homework assistance, or answers to questions, provide COMPLETE SOLUTIONS with detailed explanations.
 
 Provide detailed, practical help with file memory support:
 """
@@ -852,7 +939,7 @@ async def process_document_message(update: Update, context: CallbackContext, use
         reply_html = make_user_friendly_html(analysis_result, f"Document: {file_name}", is_file=True)
         
         # Add memory reminder
-        memory_note = "\n\n💾 <i>I've saved this analysis in memory! You can ask follow-up questions like:</i>\n• <i>'Explain page 3'</i>\n• <i>'Help with question 5'</i>\n• <i>'What was the main point?'</i>"
+        memory_note = "\n\n💾 <i>I've saved this analysis in memory! You can ask follow-up questions like:</i>\n• <i>'Explain page 3'</i>\n• <i>'Help with question 5'</i>\n• <i>'What was the main point?'</i>\n• <i>'Give me all the answers'</i>"
         full_reply = reply_html + memory_note
         
         await processing_msg.edit_text(full_reply, parse_mode="HTML")
@@ -979,21 +1066,22 @@ def health_check():
             time.sleep(300)  # 5 minutes on error
 
 # -------------------------
-# ROBUST MAIN FUNCTION - ALWAYS RUNNING (updated for python-telegram-bot v20+)
+# ROBUST MAIN FUNCTION - OPTIMIZED FOR KOYEB
 # -------------------------
 def main():
-    """Main function that ensures bot runs forever"""
-    # 🔥 START KEEP-ALIVE SERVER (Replit specific)
+    """Main function that ensures bot runs forever on Koyeb"""
+    # 🔥 START KEEP-ALIVE SERVER
     keep_alive()
     
-    log_info("🚀 Starting Comprehensive Language Tutor Bot with Enhanced File Memory...", "SYSTEM")
+    log_info("🚀 Starting Comprehensive Language Tutor Bot on Koyeb...", "SYSTEM")
+    log_info(f"🤖 Server running on port {port}", "SYSTEM")
     
     # Start health monitoring in background thread
     import threading
     health_thread = threading.Thread(target=health_check, daemon=True)
     health_thread.start()
     
-    max_retries = 10
+    max_retries = 999  # Keep retrying forever on Koyeb
     retry_delay = 30
     
     for attempt in range(max_retries):
@@ -1007,7 +1095,7 @@ def main():
             application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
             application.add_error_handler(error_handler)
             
-            log_info(f"🔄 Starting polling (attempt {attempt + 1}/{max_retries})...", "SYSTEM")
+            log_info(f"🔄 Starting Telegram bot polling (attempt {attempt + 1})...", "SYSTEM")
             
             # Start polling
             application.run_polling(
@@ -1018,7 +1106,6 @@ def main():
             )
             
             log_info("✅ Bot is now running with enhanced file memory support!", "SYSTEM")
-            log_info("💬 Users can now send text messages, PDFs, and images WITH COMPLETE MEMORY", "SYSTEM")
             
         except Exception as e:
             logger.error(f"❌ Bot crashed on attempt {attempt + 1}: {e}", extra={"user_id": "SYSTEM"})
@@ -1026,11 +1113,11 @@ def main():
             if attempt < max_retries - 1:
                 log_info(f"🔄 Restarting bot in {retry_delay} seconds...", "SYSTEM")
                 time.sleep(retry_delay)
-                retry_delay = min(retry_delay * 1.5, 300)  # Exponential backoff, max 5 minutes
             else:
-                log_info("❌ Max retries exceeded. Bot shutting down.", "SYSTEM")
-                raise
+                log_info("🔁 Maximum retries reached, but continuing anyway...", "SYSTEM")
+                time.sleep(retry_delay)
+                # Reset attempt counter to continue forever
+                attempt = 0
 
 if __name__ == "__main__":
     main()
-
