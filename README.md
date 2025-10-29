@@ -2,6 +2,9 @@
 
 ![Bot Image](https://github.com/sreypich999/Bot/blob/main/photo_2025-10-22_23-21-46.jpg)
 
+
+![Bot Image](https://github.com/sreypich999/Bot/blob/main/photo_2025-10-29_11-20-56.jpg)
+
 A powerful Telegram bot designed to help students master English, Khmer, and French through interactive learning, comprehensive writing assistance, and advanced file upload support with complete memory retention.
 
 ## 🌟 Features
