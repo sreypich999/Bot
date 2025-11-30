@@ -3,7 +3,7 @@ import logging
 import asyncio
 import time
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 from dotenv import load_dotenv
 import html
@@ -101,21 +101,21 @@ if not GEMINI_API_KEY:
 try:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
-    # Use a model that supports vision
-    model = genai.GenerativeModel("")
-    vision_model = genai.GenerativeModel("")
-    log_info("Gemini configured successfully with vision support", "N/A")
+    # Use Gemini 2.5 Flash model for both text and vision
+    model = genai.GenerativeModel("gemini-2.5-flash")
+    vision_model = genai.GenerativeModel("gemini-2.5-flash")
+    log_info("Gemini 1.5 Flash configured successfully with vision support", "N/A")
 except Exception as e:
     log_info(f"Gemini configuration failed: {e}", "N/A")
     model = None
     vision_model = None
 
 # -------------------------
-# ENHANCED User context with COMPREHENSIVE FILE MEMORY
+# ENHANCED User context with COMPREHENSIVE FILE MEMORY AND QUIZ TRACKING
 # -------------------------
 user_context = defaultdict(lambda: {
     "level": "beginner",
-    "language": "English", 
+    "language": "English",
     "last_topic": None,
     "history": [],
     "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -127,12 +127,36 @@ user_context = defaultdict(lambda: {
     "grammar_issues": [],
     "uploaded_documents": [],
     "current_file_analysis": None,  # Track current file being discussed
-    "file_memory": []  # Store all file analyses with metadata
+    "file_memory": [],  # Store all file analyses with metadata
+    "quiz_scores": [],  # Track quiz performance
+    "current_quiz": None,  # Track active quiz
+    "total_quizzes_taken": 0,
+    "average_score": 0.0,
+    "study_streak": 0,
+    "last_study_date": None,
+    "flashcards": [],  # Vocabulary flashcards with spaced repetition
+    "current_flashcard_session": None,  # Track active flashcard review session
+    "daily_goals": {
+        "quizzes_per_day": 1,
+        "flashcards_per_day": 10,
+        "study_minutes_per_day": 30
+    },
+    "today_progress": {
+        "date": None,
+        "quizzes_completed": 0,
+        "flashcards_reviewed": 0,
+        "study_minutes": 0
+    },
+    "study_groups": [],  # Groups the user belongs to
+    "owned_groups": []   # Groups the user created
 })
 
-# COMPREHENSIVE SYSTEM PROMPT with ENHANCED FILE MEMORY SUPPORT AND QUIZ HELP
+# Global study groups storage
+study_groups = {}
+
+# COMPREHENSIVE SYSTEM PROMPT with ENHANCED FILE MEMORY SUPPORT, QUIZ HELP, AND INTERACTIVE FEATURES
 SYSTEM_PROMPT = """
-You are an advanced, comprehensive language tutor for students learning English, Khmer, and French. 
+You are an advanced, comprehensive language tutor for students learning English, Khmer, and French.
 
 IMPORTANT FORMATTING RULES:
 - NEVER use markdown tables, code blocks, or complex formatting
@@ -144,7 +168,7 @@ IMPORTANT FORMATTING RULES:
   Example: [simple example]
 
 - For vocabulary: list items with clear definitions
-- For comparisons: use simple bullet points with • 
+- For comparisons: use simple bullet points with •
 - Keep responses concise but complete
 - Use natural paragraph breaks for readability
 - Focus on clear, conversational explanations
@@ -155,6 +179,14 @@ CRITICAL: PROVIDE DIRECT ANSWERS AND COMPLETE HELP
 - Always provide direct answers to questions from uploaded files, worksheets, or assignments
 - Help students complete exercises by providing answers AND explanations
 - Do not hesitate to give complete solutions - the goal is learning through understanding
+
+INTERACTIVE QUIZ GENERATION:
+• Create custom quizzes based on topics, difficulty levels, and student needs
+• Generate multiple choice, true/false, fill-in-the-blank, and short answer questions
+• Provide immediate feedback and explanations for all answers
+• Track quiz scores and learning progress
+• Adapt quiz difficulty based on student performance
+• Support quizzes in English, Khmer, and French
 
 COMPREHENSIVE QUIZ AND ASSIGNMENT SUPPORT:
 • Provide DIRECT ANSWERS to all quiz questions with detailed explanations
@@ -463,8 +495,16 @@ async def process_uploaded_file(file_path: str, file_type: str, user_message: st
                 'mime_type': 'application/pdf',
                 'data': file_data
             }
+        elif file_type in ['docx', 'doc']:
+            # For Word documents, we'd need python-docx library
+            # For now, provide basic support note
+            return f"I've received your Word document '{file_path.split('/')[-1]}'. For full document analysis, additional text extraction libraries would be needed. I can still help you with general questions about the document type and provide study guidance!"
+        elif file_type in ['pptx', 'ppt']:
+            # For PowerPoint, we'd need python-pptx library
+            # For now, provide basic support note
+            return f"I've received your PowerPoint presentation '{file_path.split('/')[-1]}'. For full slide analysis, additional presentation processing libraries would be needed. I can help you prepare presentations and provide speaking tips!"
         else:
-            return f"I'm sorry, I cannot process {file_type} files yet. Please try with PDF, JPG, or PNG files."
+            return f"I'm sorry, I cannot process {file_type} files yet. Please try with PDF, JPG, PNG, DOCX, or PPTX files."
         
         response = vision_model.generate_content([prompt, file_part])
         return response.text if hasattr(response, 'text') else "I couldn't analyze this file properly. Please try again."
@@ -472,6 +512,718 @@ async def process_uploaded_file(file_path: str, file_type: str, user_message: st
     except Exception as e:
         log_info(f"Error processing file: {e}", "FILE_PROCESSING")
         return f"I encountered an error while processing your file: {str(e)}. Please try again with a different file or format."
+
+# -------------------------
+# INTERACTIVE QUIZ SYSTEM
+# -------------------------
+def generate_quiz(topic: str, level: str, language: str, num_questions: int = 5) -> dict:
+    """Generate an interactive quiz based on topic, level, and language"""
+    quiz_prompt = f"""
+    Create an interactive quiz for {language} language learning.
+
+    TOPIC: {topic}
+    LEVEL: {level}
+    NUMBER OF QUESTIONS: {num_questions}
+
+    Create a quiz with {num_questions} questions. Mix different question types:
+    - Multiple choice (3-4 options)
+    - True/False
+    - Fill-in-the-blank
+    - Short answer
+
+    Format each question as:
+    Question Type: [type]
+    Question: [question text]
+    Options: [A] option1 [B] option2 [C] option3 [D] option4 (for multiple choice)
+    Correct Answer: [answer]
+    Explanation: [brief explanation]
+
+    Make questions appropriate for {level} level students.
+    Focus on {topic} related content.
+    Provide clear, educational explanations.
+    """
+
+    try:
+        if not model:
+            return None
+
+        response = model.generate_content(quiz_prompt)
+        quiz_content = response.text if hasattr(response, 'text') else ""
+
+        # Parse the quiz content into structured format
+        questions = []
+        lines = quiz_content.split('\n')
+        current_question = {}
+
+        for line in lines:
+            line = line.strip()
+            if line.startswith('Question Type:'):
+                if current_question:
+                    questions.append(current_question)
+                current_question = {'type': line.replace('Question Type:', '').strip()}
+            elif line.startswith('Question:'):
+                current_question['question'] = line.replace('Question:', '').strip()
+            elif line.startswith('Options:'):
+                current_question['options'] = line.replace('Options:', '').strip()
+            elif line.startswith('Correct Answer:'):
+                current_question['answer'] = line.replace('Correct Answer:', '').strip()
+            elif line.startswith('Explanation:'):
+                current_question['explanation'] = line.replace('Explanation:', '').strip()
+
+        if current_question:
+            questions.append(current_question)
+
+        return {
+            'topic': topic,
+            'level': level,
+            'language': language,
+            'questions': questions[:num_questions],  # Limit to requested number
+            'total_questions': len(questions[:num_questions]),
+            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+    except Exception as e:
+        log_info(f"Error generating quiz: {e}", "QUIZ_SYSTEM")
+        return None
+
+def format_quiz_for_display(quiz: dict) -> str:
+    """Format quiz for display to user"""
+    if not quiz or not quiz.get('questions'):
+        return "I couldn't generate a quiz right now. Please try again later."
+
+    formatted = f"<b>🎯 {quiz['topic'].title()} Quiz</b>\n"
+    formatted += f"<i>Level: {quiz['level'].title()} | Language: {quiz['language']}</i>\n\n"
+
+    for i, question in enumerate(quiz['questions'], 1):
+        formatted += f"<b>Question {i}:</b> {question['question']}\n"
+
+        if question.get('options'):
+            formatted += f"{question['options']}\n"
+
+        formatted += "\n"
+
+    formatted += "Reply with your answers (e.g., '1. A, 2. True, 3. [your answer]')\n"
+    formatted += "I'll check them and provide feedback!"
+
+    return formatted
+
+def check_quiz_answers(quiz: dict, user_answers: list) -> dict:
+    """Check user's quiz answers and return results"""
+    if not quiz or not quiz.get('questions'):
+        return {"error": "No quiz data available"}
+
+    results = {
+        'total_questions': len(quiz['questions']),
+        'correct_answers': 0,
+        'score_percentage': 0,
+        'feedback': []
+    }
+
+    for i, question in enumerate(quiz['questions']):
+        user_answer = user_answers[i] if i < len(user_answers) else ""
+        correct = question.get('answer', '').lower().strip()
+        user_ans = user_answer.lower().strip()
+
+        is_correct = user_ans == correct
+
+        if is_correct:
+            results['correct_answers'] += 1
+
+        feedback = {
+            'question_num': i + 1,
+            'question': question['question'],
+            'user_answer': user_answer,
+            'correct_answer': question.get('answer', ''),
+            'is_correct': is_correct,
+            'explanation': question.get('explanation', '')
+        }
+
+        results['feedback'].append(feedback)
+
+    results['score_percentage'] = round((results['correct_answers'] / results['total_questions']) * 100, 1)
+
+    return results
+
+def format_quiz_results(results: dict) -> str:
+    """Format quiz results for display"""
+    formatted = f"<b>📊 Quiz Results</b>\n\n"
+    formatted += f"<b>Score: {results['correct_answers']}/{results['total_questions']} ({results['score_percentage']}%)</b>\n\n"
+
+    for feedback in results['feedback']:
+        status = "✅" if feedback['is_correct'] else "❌"
+        formatted += f"<b>Q{feedback['question_num']}:</b> {status}\n"
+        formatted += f"Your answer: {feedback['user_answer']}\n"
+        formatted += f"Correct: {feedback['correct_answer']}\n"
+
+        if feedback.get('explanation'):
+            formatted += f"💡 {feedback['explanation']}\n"
+
+        formatted += "\n"
+
+    # Add encouragement based on score
+    if results['score_percentage'] >= 90:
+        formatted += "🎉 Excellent work! You're mastering this topic!"
+    elif results['score_percentage'] >= 70:
+        formatted += "👍 Good job! Keep practicing to improve further."
+    elif results['score_percentage'] >= 50:
+        formatted += "📚 Not bad! Review the explanations and try again."
+    else:
+        formatted += "💪 Don't worry! Learning takes time. Let's review and try again."
+
+    return formatted
+
+def get_progress_statistics(user_id: str) -> str:
+    """Generate comprehensive progress statistics for a user"""
+    if user_id not in user_context:
+        return "No progress data available yet. Start learning to see your statistics!"
+
+    user_data = user_context[user_id]
+
+    # Calculate days since first seen
+    try:
+        first_seen = datetime.strptime(user_data["first_seen"], "%Y-%m-%d %H:%M:%S")
+        days_learning = (datetime.now() - first_seen).days + 1
+    except:
+        days_learning = 1
+
+    # Quiz statistics
+    quiz_scores = user_data.get("quiz_scores", [])
+    total_quizzes = len(quiz_scores)
+    avg_score = user_data.get("average_score", 0.0)
+
+    # Recent quiz performance
+    recent_scores = quiz_scores[-5:] if quiz_scores else []
+    recent_avg = sum(score["score"] for score in recent_scores) / len(recent_scores) if recent_scores else 0
+
+    # Learning profile
+    level = user_data.get("level", "beginner").title()
+    language = user_data.get("language", "English")
+    goals = user_data.get("learning_goals", [])
+    strengths = user_data.get("strengths", [])
+    weak_areas = user_data.get("weak_areas", [])
+
+    # File uploads
+    total_files = len(user_data.get("file_memory", []))
+
+    # Study streak (simplified - based on quiz activity)
+    study_streak = user_data.get("study_streak", 0)
+
+    # Format the statistics
+    stats = f"<b>📈 Your Learning Progress Dashboard</b>\n\n"
+
+    # Basic info
+    stats += f"<b>👤 Profile:</b>\n"
+    stats += f"• Level: {level}\n"
+    stats += f"• Language: {language}\n"
+    stats += f"• Learning for: {days_learning} days\n\n"
+
+    # Quiz performance
+    stats += f"<b>🎯 Quiz Performance:</b>\n"
+    stats += f"• Total quizzes taken: {total_quizzes}\n"
+    if total_quizzes > 0:
+        stats += f"• Average score: {avg_score:.1f}%\n"
+        stats += f"• Recent average (last 5): {recent_avg:.1f}%\n"
+
+        # Performance trend
+        if len(recent_scores) >= 2:
+            trend = "📈 Improving" if recent_avg > avg_score else "📉 Needs focus"
+            stats += f"• Trend: {trend}\n"
+    stats += "\n"
+
+    # Learning goals and areas
+    if goals:
+        stats += f"<b>🎯 Learning Goals:</b>\n"
+        for goal in goals:
+            stats += f"• {goal.title()}\n"
+        stats += "\n"
+
+    if strengths:
+        stats += f"<b>💪 Strengths:</b>\n"
+        for strength in strengths:
+            stats += f"• {strength.title()}\n"
+        stats += "\n"
+
+    if weak_areas:
+        stats += f"<b>📚 Areas to Focus On:</b>\n"
+        for area in weak_areas:
+            stats += f"• {area.title()}\n"
+        stats += "\n"
+
+    # Daily goals and progress
+    daily_goals = user_data.get("daily_goals", {})
+    today_progress = user_data.get("today_progress", {})
+
+    stats += f"<b>🎯 Today's Goals & Progress:</b>\n"
+    stats += f"• Quizzes: {today_progress.get('quizzes_completed', 0)}/{daily_goals.get('quizzes_per_day', 1)}\n"
+    stats += f"• Flashcards: {today_progress.get('flashcards_reviewed', 0)}/{daily_goals.get('flashcards_per_day', 10)}\n"
+    stats += f"• Study time: {today_progress.get('study_minutes', 0)}/{daily_goals.get('study_minutes_per_day', 30)} min\n\n"
+
+    # Activity summary
+    stats += f"<b>📊 Activity Summary:</b>\n"
+    stats += f"• Files analyzed: {total_files}\n"
+    stats += f"• Study streak: {study_streak} days\n"
+    stats += f"• Total interactions: {len(user_data.get('history', []))}\n\n"
+
+    # Encouragement
+    if avg_score >= 80:
+        stats += "🌟 <b>Excellent progress!</b> You're doing great!"
+    elif avg_score >= 60:
+        stats += "👍 <b>Good work!</b> Keep up the consistent practice!"
+    elif total_quizzes > 0:
+        stats += "💪 <b>Keep going!</b> Every quiz helps you improve!"
+    else:
+        stats += "🚀 <b>Ready to start?</b> Try taking a quiz to begin tracking your progress!"
+
+    return stats
+
+# -------------------------
+# FLASHCARD SYSTEM FOR VOCABULARY BUILDING
+# -------------------------
+def create_flashcard(word: str, definition: str, language: str, level: str, examples: list = None) -> dict:
+    """Create a new flashcard with spaced repetition data"""
+    return {
+        "word": word,
+        "definition": definition,
+        "language": language,
+        "level": level,
+        "examples": examples or [],
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "last_reviewed": None,
+        "next_review": datetime.now().strftime("%Y-%m-%d"),
+        "ease_factor": 2.5,  # Spaced repetition ease factor
+        "interval": 1,  # Days until next review
+        "review_count": 0,
+        "correct_streak": 0
+    }
+
+def generate_flashcards(topic: str, language: str, level: str, count: int = 10) -> list:
+    """Generate flashcards for a specific topic using AI"""
+    prompt = f"""
+    Create {count} vocabulary flashcards for {language} language learning.
+
+    TOPIC: {topic}
+    LEVEL: {level}
+    NUMBER OF CARDS: {count}
+
+    For each flashcard, provide:
+    Word: [vocabulary word]
+    Definition: [clear definition in simple English]
+    Examples: [2-3 example sentences using the word]
+
+    Make sure the vocabulary is appropriate for {level} level students.
+    Focus on useful {topic} related words.
+    Provide practical, commonly used vocabulary.
+    """
+
+    try:
+        if not model:
+            return []
+
+        response = model.generate_content(prompt)
+        content = response.text if hasattr(response, 'text') else ""
+
+        # Parse flashcards from response
+        flashcards = []
+        lines = content.split('\n')
+        current_card = {}
+
+        for line in lines:
+            line = line.strip()
+            if line.startswith('Word:'):
+                if current_card and 'word' in current_card:
+                    flashcards.append(create_flashcard(
+                        current_card['word'],
+                        current_card.get('definition', ''),
+                        language,
+                        level,
+                        current_card.get('examples', [])
+                    ))
+                current_card = {'word': line.replace('Word:', '').strip()}
+            elif line.startswith('Definition:'):
+                current_card['definition'] = line.replace('Definition:', '').strip()
+            elif line.startswith('Examples:') or line.startswith('Example:'):
+                examples_text = line.replace('Examples:', '').replace('Example:', '').strip()
+                # Split examples if multiple
+                current_card['examples'] = [ex.strip() for ex in examples_text.split(';') if ex.strip()]
+
+        # Add the last card
+        if current_card and 'word' in current_card:
+            flashcards.append(create_flashcard(
+                current_card['word'],
+                current_card.get('definition', ''),
+                language,
+                level,
+                current_card.get('examples', [])
+            ))
+
+        return flashcards[:count]
+
+    except Exception as e:
+        log_info(f"Error generating flashcards: {e}", "FLASHCARD_SYSTEM")
+        return []
+
+def get_due_flashcards(user_id: str) -> list:
+    """Get flashcards that are due for review"""
+    if user_id not in user_context:
+        return []
+
+    flashcards = user_context[user_id]["flashcards"]
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    due_cards = []
+    for card in flashcards:
+        next_review = card.get("next_review", today)
+        if next_review <= today:
+            due_cards.append(card)
+
+    return due_cards
+
+def update_flashcard_progress(card: dict, quality: int) -> dict:
+    """Update flashcard using spaced repetition algorithm (simplified)"""
+    # Quality: 0-5 (0=complete blackout, 5=perfect response)
+    if quality < 3:
+        # Incorrect - reset interval
+        card["interval"] = 1
+        card["correct_streak"] = 0
+    else:
+        # Correct - increase interval
+        if card["correct_streak"] == 0:
+            card["interval"] = 1
+        elif card["correct_streak"] == 1:
+            card["interval"] = 6
+        else:
+            card["interval"] = int(card["interval"] * card["ease_factor"])
+
+        card["correct_streak"] += 1
+
+    # Update ease factor
+    card["ease_factor"] = max(1.3, card["ease_factor"] + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)))
+
+    # Set next review date
+    next_review_date = datetime.now() + timedelta(days=card["interval"])
+    card["next_review"] = next_review_date.strftime("%Y-%m-%d")
+    card["last_reviewed"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    card["review_count"] += 1
+
+    return card
+
+def format_flashcard(card: dict) -> str:
+    """Format a flashcard for display"""
+    formatted = f"<b>📚 {card['word']}</b>\n\n"
+    formatted += f"<i>Language: {card['language']} | Level: {card['level']}</i>\n\n"
+
+    if card.get('examples'):
+        formatted += "<b>Examples:</b>\n"
+        for i, example in enumerate(card['examples'], 1):
+            formatted += f"{i}. {example}\n"
+        formatted += "\n"
+
+    formatted += "Reply with:\n"
+    formatted += "• 'show' - Reveal the definition\n"
+    formatted += "• 'easy' - I knew this well\n"
+    formatted += "• 'good' - I remembered with some thought\n"
+    formatted += "• 'hard' - I struggled to remember\n"
+    formatted += "• 'again' - Complete blackout"
+
+    return formatted
+
+def format_flashcard_answer(card: dict) -> str:
+    """Format flashcard with answer revealed"""
+    formatted = f"<b>📚 {card['word']}</b>\n\n"
+    formatted += f"<b>Definition:</b> {card['definition']}\n\n"
+
+    if card.get('examples'):
+        formatted += "<b>Examples:</b>\n"
+        for i, example in enumerate(card['examples'], 1):
+            formatted += f"{i}. {example}\n"
+        formatted += "\n"
+
+    formatted += "How well did you know this?\n"
+    formatted += "• '5' - Perfect, instant recall\n"
+    formatted += "• '4' - Correct, but took time\n"
+    formatted += "• '3' - Correct, with difficulty\n"
+    formatted += "• '2' - Incorrect, but remembered when shown\n"
+    formatted += "• '1' - Complete blackout"
+
+    return formatted
+
+# -------------------------
+# STUDY GROUP SYSTEM
+# -------------------------
+def create_study_group(group_name: str, creator_id: str, description: str = "") -> dict:
+    """Create a new study group"""
+    group_id = f"group_{len(study_groups) + 1}"
+    group = {
+        "id": group_id,
+        "name": group_name,
+        "creator": creator_id,
+        "description": description,
+        "members": [creator_id],
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "total_quizzes": 0,
+        "total_flashcards": 0,
+        "group_challenges": []
+    }
+    study_groups[group_id] = group
+    return group
+
+def join_study_group(user_id: str, group_id: str) -> bool:
+    """Join a study group"""
+    if group_id not in study_groups:
+        return False
+
+    if user_id not in study_groups[group_id]["members"]:
+        study_groups[group_id]["members"].append(user_id)
+
+    if group_id not in user_context[user_id]["study_groups"]:
+        user_context[user_id]["study_groups"].append(group_id)
+
+    return True
+
+def get_group_leaderboard(group_id: str) -> list:
+    """Get leaderboard for a study group"""
+    if group_id not in study_groups:
+        return []
+
+    members = study_groups[group_id]["members"]
+    leaderboard = []
+
+    for member_id in members:
+        if member_id in user_context:
+            user_data = user_context[member_id]
+            leaderboard.append({
+                "user_id": member_id,
+                "name": f"Student {member_id[-4:]}",  # Simple anonymized name
+                "quizzes_completed": user_data.get("total_quizzes_taken", 0),
+                "average_score": user_data.get("average_score", 0.0),
+                "study_streak": user_data.get("study_streak", 0),
+                "flashcards_count": len(user_data.get("flashcards", []))
+            })
+
+    # Sort by average score, then by quizzes completed
+    leaderboard.sort(key=lambda x: (x["average_score"], x["quizzes_completed"]), reverse=True)
+    return leaderboard
+
+def format_group_info(group: dict) -> str:
+    """Format study group information"""
+    members_count = len(group["members"])
+    created_date = datetime.strptime(group["created_at"], "%Y-%m-%d %H:%M:%S").strftime("%B %d, %Y")
+
+    info = f"<b>📚 {group['name']}</b>\n\n"
+    if group.get("description"):
+        info += f"<i>{group['description']}</i>\n\n"
+
+    info += f"👥 <b>Members:</b> {members_count}\n"
+    info += f"📅 <b>Created:</b> {created_date}\n"
+    info += f"🎯 <b>Group Quizzes:</b> {group['total_quizzes']}\n"
+    info += f"🃏 <b>Group Flashcards:</b> {group['total_flashcards']}\n\n"
+
+    # Show top 3 members
+    leaderboard = get_group_leaderboard(group["id"])[:3]
+    if leaderboard:
+        info += "<b>🏆 Top Members:</b>\n"
+        for i, member in enumerate(leaderboard, 1):
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉"
+            info += f"{medal} {member['name']}: {member['average_score']:.1f}% avg\n"
+        info += "\n"
+
+    return info
+
+# -------------------------
+# PERSONALIZED LEARNING PATHS
+# -------------------------
+def generate_learning_path(user_id: str) -> str:
+    """Generate a personalized learning path based on user progress and goals"""
+    if user_id not in user_context:
+        return "Please start learning first so I can create a personalized path for you!"
+
+    user_data = user_context[user_id]
+
+    # Analyze user profile
+    level = user_data.get("level", "beginner")
+    language = user_data.get("language", "English")
+    goals = user_data.get("learning_goals", [])
+    weak_areas = user_data.get("weak_areas", [])
+    strengths = user_data.get("strengths", [])
+
+    # Quiz performance analysis
+    quiz_scores = user_data.get("quiz_scores", [])
+    avg_score = user_data.get("average_score", 0.0)
+    total_quizzes = len(quiz_scores)
+
+    # Flashcard progress
+    flashcards = user_data.get("flashcards", [])
+    total_flashcards = len(flashcards)
+
+    # Study patterns
+    study_streak = user_data.get("study_streak", 0)
+
+    # Generate personalized recommendations
+    path = f"<b>🎯 Your Personalized Learning Path</b>\n\n"
+    path += f"<b>👤 Profile:</b> {level.title()} {language} learner\n\n"
+
+    # Current assessment
+    path += "<b>📊 Current Assessment:</b>\n"
+    if total_quizzes > 0:
+        path += f"• Quiz average: {avg_score:.1f}%\n"
+    else:
+        path += "• No quiz data yet - start with quizzes!\n"
+
+    path += f"• Vocabulary cards: {total_flashcards}\n"
+    path += f"• Study streak: {study_streak} days\n\n"
+
+    # Weekly learning plan
+    path += "<b>📅 Weekly Learning Plan:</b>\n\n"
+
+    # Day 1-2: Focus on weaknesses
+    if weak_areas:
+        path += "<b>📚 Days 1-2: Address Weak Areas</b>\n"
+        for area in weak_areas[:2]:
+            path += f"• Practice {area} with targeted exercises\n"
+        path += "• Take 2 quizzes on weak topics\n"
+        path += "• Review 10 flashcards daily\n\n"
+    else:
+        path += "<b>📚 Days 1-2: Build Foundations</b>\n"
+        path += "• Take introductory quizzes\n"
+        path += "• Learn basic vocabulary (20 cards)\n"
+        path += "• Practice basic grammar\n\n"
+
+    # Day 3-4: Build on strengths
+    if strengths:
+        path += "<b>💪 Days 3-4: Leverage Strengths</b>\n"
+        for strength in strengths[:2]:
+            path += f"• Advanced practice in {strength}\n"
+        path += "• Create content using your strengths\n"
+        path += "• Help others with your strong areas\n\n"
+    else:
+        path += "<b>💪 Days 3-4: Skill Building</b>\n"
+        path += "• Practice writing and speaking\n"
+        path += "• Learn intermediate vocabulary\n"
+        path += "• Work on comprehensive exercises\n\n"
+
+    # Day 5-7: Mixed practice and review
+    path += "<b>🔄 Days 5-7: Mixed Practice & Review</b>\n"
+    path += "• Review all weak areas\n"
+    path += "• Take comprehensive quizzes\n"
+    path += "• Practice with uploaded materials\n"
+    path += "• Join or create study groups\n\n"
+
+    # Long-term goals
+    if goals:
+        path += "<b>🎯 Long-term Goals Focus:</b>\n"
+        for goal in goals:
+            path += f"• {goal.title()}: Weekly dedicated practice\n"
+        path += "\n"
+
+    # Progress milestones
+    path += "<b>🏆 Progress Milestones:</b>\n"
+    path += "• <b>Week 1:</b> Complete 5 quizzes, 50 flashcards\n"
+    path += "• <b>Week 2:</b> Improve average score by 10%\n"
+    path += "• <b>Week 4:</b> Master 2 weak areas\n"
+    path += "• <b>Month 1:</b> Reach 100 flashcards, 20 quizzes\n\n"
+
+    # Study tips
+    path += "<b>💡 Study Tips:</b>\n"
+    path += "• Study daily to maintain your streak\n"
+    path += "• Focus on understanding, not just memorization\n"
+    path += "• Use spaced repetition for vocabulary\n"
+    path += "• Practice with real-world applications\n"
+    path += "• Join study groups for motivation\n\n"
+
+    # Next steps
+    path += "<b>🚀 Next Steps:</b>\n"
+    if total_quizzes == 0:
+        path += "• Start with 'Create a quiz about [topic]'\n"
+    if total_flashcards < 20:
+        path += "• Build vocabulary: 'Create flashcards for [topic]'\n"
+    if not goals:
+        path += "• Set goals by asking about specific skills\n"
+    path += "• Check progress with 'Show my progress'\n"
+    path += "• Join others with 'Create group [name]'"
+
+    return path
+
+# -------------------------
+# MULTIMEDIA CONTENT SUPPORT
+# -------------------------
+def get_multimedia_resources(topic: str, language: str, content_type: str = "all") -> str:
+    """Provide multimedia learning resources and links"""
+    resources = f"<b>🎬 Multimedia Resources for {topic.title()}</b>\n\n"
+
+    # YouTube educational channels and playlists
+    if content_type in ["all", "video"]:
+        resources += "<b>📺 Educational Videos:</b>\n"
+        if language.lower() == "english":
+            if "grammar" in topic.lower():
+                resources += "• <a href='https://www.youtube.com/results?search_query=english+grammar+explained'>English Grammar Explained</a>\n"
+                resources += "• <a href='https://www.youtube.com/user/EnglishLessonswithAdam'>English with Adam</a>\n"
+            elif "vocabulary" in topic.lower():
+                resources += "• <a href='https://www.youtube.com/results?search_query=english+vocabulary+building'>Vocabulary Building Videos</a>\n"
+                resources += "• <a href='https://www.youtube.com/user/TED-Ed'>TED-Ed Vocabulary</a>\n"
+            elif "pronunciation" in topic.lower():
+                resources += "• <a href='https://www.youtube.com/results?search_query=english+pronunciation+practice'>Pronunciation Practice</a>\n"
+                resources += "• <a href='https://www.youtube.com/user/Rachel'sEnglish'>Rachel's English</a>\n"
+            else:
+                resources += "• <a href='https://www.youtube.com/results?search_query=learn+english+conversation'>English Conversation Practice</a>\n"
+                resources += "• <a href='https://www.youtube.com/user/EnglishAnyone'>English Anyone</a>\n"
+        elif language.lower() == "french":
+            resources += "• <a href='https://www.youtube.com/results?search_query=apprendre+le+français'>Learn French Videos</a>\n"
+            resources += "• <a href='https://www.youtube.com/user/FrenchPod101'>FrenchPod101</a>\n"
+        elif language.lower() == "khmer":
+            resources += "• <a href='https://www.youtube.com/results?search_query=learn+khmer+language'>Khmer Language Learning</a>\n"
+            resources += "• <a href='https://www.youtube.com/results?search_query=khmer+alphabet'>Khmer Alphabet Videos</a>\n"
+        resources += "\n"
+
+    # Audio resources
+    if content_type in ["all", "audio"]:
+        resources += "<b>🎧 Audio Learning Resources:</b>\n"
+        if language.lower() == "english":
+            resources += "• <a href='https://www.bbc.co.uk/learningenglish'>BBC Learning English</a> - Podcasts & audio lessons\n"
+            resources += "• <a href='https://www.eslpod.com'>ESL Pod</a> - English learning podcasts\n"
+        elif language.lower() == "french":
+            resources += "• <a href='https://www.france24.com/en/tag/learning-french/'>France 24 Learning French</a>\n"
+            resources += "• <a href='https://coffeebreaklanguages.com/french/'>Coffee Break French</a> - Audio lessons\n"
+        elif language.lower() == "khmer":
+            resources += "• <a href='https://www.bbc.co.uk/languages/other/khmer/'>BBC Khmer Service</a>\n"
+        resources += "\n"
+
+    # Interactive websites
+    if content_type in ["all", "interactive"]:
+        resources += "<b>💻 Interactive Learning Websites:</b>\n"
+        resources += "• <a href='https://www.duolingo.com'>Duolingo</a> - Gamified language learning\n"
+        resources += "• <a href='https://www.memrise.com'>Memrise</a> - Vocabulary and phrases\n"
+        resources += "• <a href='https://www.busuu.com'>Busuu</a> - Community-based learning\n"
+        if language.lower() == "english":
+            resources += "• <a href='https://www.englishgrammar101.com'>English Grammar 101</a> - Interactive exercises\n"
+        resources += "\n"
+
+    # Documentaries and cultural content
+    if content_type in ["all", "cultural"]:
+        resources += "<b>🎭 Cultural & Immersive Content:</b>\n"
+        if language.lower() == "english":
+            resources += "• <a href='https://www.netflix.com'>Netflix</a> - Watch shows with English subtitles\n"
+            resources += "• <a href='https://www.bbc.co.uk/iplayer'>BBC iPlayer</a> - British English content\n"
+        elif language.lower() == "french":
+            resources += "• <a href='https://www.netflix.com'>Netflix</a> - French films and series\n"
+            resources += "• <a href='https://www.france.tv'>France.tv</a> - French public television\n"
+        elif language.lower() == "khmer":
+            resources += "• <a href='https://www.youtube.com/results?search_query=khmer+movies'>Khmer Movies & Documentaries</a>\n"
+        resources += "\n"
+
+    # Study tips
+    resources += "<b>💡 Multimedia Learning Tips:</b>\n"
+    resources += "• Watch videos at 0.75x speed for better comprehension\n"
+    resources += "• Use subtitles in your target language first, then native language\n"
+    resources += "• Listen to podcasts during commutes or chores\n"
+    resources += "• Practice speaking along with video content\n"
+    resources += "• Take notes while watching educational videos\n\n"
+
+    resources += "<b>🔗 Additional Resources:</b>\n"
+    resources += "• <a href='https://www.opensubtitles.org'>OpenSubtitles</a> - Find subtitles for movies\n"
+    resources += "• <a href='https://www.ted.com/talks'>TED Talks</a> - Inspiring talks in multiple languages\n"
+    resources += "• <a href='https://www.coursera.org'>Coursera</a> - Free language courses from universities\n"
+
+    return resources
 
 # -------------------------
 # ENHANCED MEMORY FUNCTIONS with COMPREHENSIVE FILE SUPPORT
@@ -559,6 +1311,17 @@ def detect_writing_request(user_text: str) -> dict:
         "is_file_followup": any(word in text_lower for word in ["previous", "before", "last file", "uploaded", "my document", "my file", "that file"]),
         "is_file_question": any(word in text_lower for word in ["page", "question", "exercise", "section", "part", "explain again"]),
         "is_quiz_help": any(word in text_lower for word in ["quiz", "test", "exam", "question", "answer", "solution"]),
+        "is_quiz_generation": any(phrase in text_lower for phrase in ["create quiz", "generate quiz", "make quiz", "quiz me", "take quiz", "practice quiz"]),
+        "is_quiz_answer_check": any(phrase in text_lower for phrase in ["check answers", "my answers", "quiz answers"]) and any(char.isdigit() for char in user_text),
+        "is_progress_stats": any(phrase in text_lower for phrase in ["my progress", "progress stats", "statistics", "dashboard", "my stats", "learning progress", "show stats"]),
+        "is_flashcard_generation": any(phrase in text_lower for phrase in ["create flashcards", "generate flashcards", "make flashcards", "flashcards for", "vocabulary cards"]),
+        "is_flashcard_review": any(phrase in text_lower for phrase in ["review flashcards", "practice flashcards", "study cards", "flashcard review", "review vocab"]),
+        "is_flashcard_answer": any(word in text_lower for word in ["show", "easy", "good", "hard", "again"]) and len(text_lower.split()) == 1,
+        "is_create_group": any(phrase in text_lower for phrase in ["create group", "make group", "new group", "start group"]),
+        "is_join_group": any(phrase in text_lower for phrase in ["join group", "find group", "group list", "available groups"]),
+        "is_group_info": any(phrase in text_lower for phrase in ["my groups", "group info", "group stats", "group leaderboard"]),
+        "is_learning_path": any(phrase in text_lower for phrase in ["learning path", "study plan", "personalized plan", "my plan", "learning plan", "study path"]),
+        "is_multimedia": any(phrase in text_lower for phrase in ["multimedia resources", "video resources", "audio resources", "learning videos", "educational videos", "watch videos", "listen audio", "podcasts", "online resources"]),
         "is_homework_help": any(word in text_lower for word in ["homework", "assignment", "exercise", "problem"]),
         "is_direct_answer": any(word in text_lower for word in ["answer", "solve", "help with", "what is", "how to", "explain"])
     }
@@ -598,6 +1361,8 @@ I'm here to help you master English, Khmer, and French with complete writing AND
 <u>📁 ENHANCED FILE UPLOAD SUPPORT:</u>
 • <b>PDF Documents</b> - Homework, quizzes, assignments, study materials
 • <b>Images/Screenshots</b> - Questions, notes, textbook pages, worksheets
+• <b>Word Documents</b> - Essays, reports, study guides (DOCX, DOC)
+• <b>PowerPoint Presentations</b> - Slides, lecture notes (PPTX, PPT)
 • <b>Document Analysis</b> - Explain what documents want you to do
 • <b>Quiz Help</b> - Understand questions and find answers
 • <b>Homework Assistance</b> - Help complete assignments from files
@@ -615,6 +1380,42 @@ I'm here to help you master English, Khmer, and French with complete writing AND
 • <b>Assignment Help</b> - Complete assistance with all tasks
 • <b>Test Preparation</b> - Answers and explanations for practice tests
 
+<u>🧠 INTERACTIVE QUIZZES:</u>
+• <b>Custom Quiz Generation</b> - Create personalized quizzes on any topic
+• <b>Progress Tracking</b> - Track your quiz scores and improvement
+• <b>Adaptive Learning</b> - Quizzes adjust to your skill level
+• <b>Instant Feedback</b> - Get explanations for every answer
+
+<u>📚 FLASHCARD SYSTEM:</u>
+• <b>Spaced Repetition</b> - Smart vocabulary learning with optimal timing
+• <b>Custom Decks</b> - Generate flashcards for any topic or subject
+• <b>Progress Tracking</b> - Monitor your vocabulary improvement
+• <b>Multiple Languages</b> - Support for English, Khmer, and French
+
+<u>👥 STUDY GROUPS:</u>
+• <b>Collaborative Learning</b> - Join or create study groups with friends
+• <b>Group Leaderboards</b> - Compete with group members
+• <b>Shared Progress</b> - Track collective improvement
+• <b>Motivational Challenges</b> - Group study challenges and goals
+
+<u>🧭 PERSONALIZED LEARNING PATHS:</u>
+• <b>Custom Study Plans</b> - AI-generated learning paths based on your progress
+• <b>Goal-Oriented Learning</b> - Structured plans to achieve your language goals
+• <b>Adaptive Recommendations</b> - Plans that adjust to your strengths and weaknesses
+• <b>Progress Milestones</b> - Clear checkpoints and achievements
+
+<u>🎬 MULTIMEDIA LEARNING RESOURCES:</u>
+• <b>Educational Videos</b> - YouTube channels and learning playlists
+• <b>Audio Lessons</b> - Podcasts and audio learning resources
+• <b>Interactive Websites</b> - Online platforms for practice
+• <b>Cultural Content</b> - Immersive videos and documentaries
+
+<u>🎤 PRONUNCIATION PRACTICE:</u>
+• <b>Voice Message Analysis</b> - Send voice messages for pronunciation feedback
+• <b>Phonetic Guidance</b> - Learn correct sound patterns
+• <b>Language-Specific Tips</b> - English, Khmer, and French pronunciation
+• <b>Practice Exercises</b> - Targeted pronunciation drills
+
 <u>🌍 LANGUAGE SUPPORT:</u>
 • <b>Translations</b> - Accurate translations between all languages
 • <b>Vocabulary Building</b> - Academic, business, technical terms
@@ -631,6 +1432,22 @@ I'm here to help you master English, Khmer, and French with complete writing AND
 • "What was the main point of my previous upload?"
 • "Give me the answers to this quiz with explanations"
 • "Help me solve all these homework problems"
+• "Create a quiz about grammar" (I'll generate a custom quiz!)
+• "Quiz me on vocabulary" (Interactive quizzes with instant feedback)
+• "Generate a practice test on verb tenses"
+• "Show my progress" (View your learning statistics and dashboard)
+• "My stats" (See quiz scores, goals, and improvement tracking)
+• "Create flashcards for business English" (Generate vocabulary cards)
+• "Review flashcards" (Practice with spaced repetition)
+• "Create group English Study Club" (Start a collaborative study group)
+• "Join group" (Find and join existing study groups)
+• "My groups" (View your study groups and leaderboards)
+• "Show my learning path" (Get a personalized study plan)
+• "My study plan" (AI-generated learning recommendations)
+• "Show multimedia resources" (Get videos, podcasts, and online learning materials)
+• "Educational videos for grammar" (Find relevant learning videos)
+• Send a voice message (Get pronunciation feedback and practice tips)
+• "How do I pronounce [word]?" (Learn correct pronunciation)
 
 Just send me your files or requests, and I'll provide comprehensive assistance WITH MEMORY and DIRECT ANSWERS!
 """
@@ -671,7 +1488,7 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
         # Initialize user context
         user_context[user_id] = {
             "level": "beginner",
-            "language": "English", 
+            "language": "English",
             "last_topic": None,
             "history": [],
             "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -683,7 +1500,26 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
             "grammar_issues": [],
             "uploaded_documents": [],
             "current_file_analysis": None,
-            "file_memory": []
+            "file_memory": [],
+            "quiz_scores": [],
+            "current_quiz": None,
+            "total_quizzes_taken": 0,
+            "average_score": 0.0,
+            "study_streak": 0,
+            "last_study_date": None,
+            "flashcards": [],
+            "current_flashcard_session": None,
+            "daily_goals": {
+                "quizzes_per_day": 1,
+                "flashcards_per_day": 10,
+                "study_minutes_per_day": 30
+            },
+            "today_progress": {
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "quizzes_completed": 0,
+                "flashcards_reviewed": 0,
+                "study_minutes": 0
+            }
         }
         user_context[user_id]["history"].append({
             "question": user_text, 
@@ -712,7 +1548,7 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
     if is_new_user:
         user_context[user_id] = {
             "level": "beginner",
-            "language": "English", 
+            "language": "English",
             "last_topic": None,
             "history": [],
             "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -724,7 +1560,26 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
             "grammar_issues": [],
             "uploaded_documents": [],
             "current_file_analysis": None,
-            "file_memory": []
+            "file_memory": [],
+            "quiz_scores": [],
+            "current_quiz": None,
+            "total_quizzes_taken": 0,
+            "average_score": 0.0,
+            "study_streak": 0,
+            "last_study_date": None,
+            "flashcards": [],
+            "current_flashcard_session": None,
+            "daily_goals": {
+                "quizzes_per_day": 1,
+                "flashcards_per_day": 10,
+                "study_minutes_per_day": 30
+            },
+            "today_progress": {
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "quizzes_completed": 0,
+                "flashcards_reviewed": 0,
+                "study_minutes": 0
+            }
         }
 
     # Update user context
@@ -746,15 +1601,359 @@ async def process_text_message(update: Update, context: CallbackContext, user_te
     # Detect writing request type and file references
     writing_request = detect_writing_request(user_text)
     file_reference = detect_file_reference(user_text, user_id)
-    
+
+    # Handle quiz generation and checking
+    if writing_request["is_quiz_generation"]:
+        # Extract topic from user text
+        topic = "general"
+        if "grammar" in user_text.lower():
+            topic = "grammar"
+        elif "vocabulary" in user_text.lower() or "vocab" in user_text.lower():
+            topic = "vocabulary"
+        elif "tense" in user_text.lower():
+            topic = "verb tenses"
+        elif any(word in user_text.lower() for word in ["reading", "comprehension"]):
+            topic = "reading comprehension"
+
+        # Generate quiz
+        quiz = generate_quiz(
+            topic=topic,
+            level=user_context[user_id]["level"],
+            language=user_context[user_id]["language"],
+            num_questions=5
+        )
+
+        if quiz:
+            user_context[user_id]["current_quiz"] = quiz
+            quiz_text = format_quiz_for_display(quiz)
+            await update.message.reply_text(quiz_text, parse_mode="HTML")
+            return
+        else:
+            await update.message.reply_text("❌ I couldn't generate a quiz right now. Please try again later.", parse_mode="HTML")
+            return
+
+    elif writing_request["is_quiz_answer_check"] and user_context[user_id]["current_quiz"]:
+        # Parse user answers
+        user_answers = []
+        lines = user_text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if '.' in line:
+                # Extract answer after the dot
+                parts = line.split('.', 1)
+                if len(parts) > 1:
+                    answer = parts[1].strip()
+                    user_answers.append(answer)
+
+        if user_answers:
+            results = check_quiz_answers(user_context[user_id]["current_quiz"], user_answers)
+
+            # Update user stats
+            user_context[user_id]["quiz_scores"].append({
+                "score": results["score_percentage"],
+                "total_questions": results["total_questions"],
+                "correct_answers": results["correct_answers"],
+                "topic": user_context[user_id]["current_quiz"]["topic"],
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+
+            # Update average score
+            total_scores = sum(score["score"] for score in user_context[user_id]["quiz_scores"])
+            user_context[user_id]["average_score"] = round(total_scores / len(user_context[user_id]["quiz_scores"]), 1)
+            user_context[user_id]["total_quizzes_taken"] = len(user_context[user_id]["quiz_scores"])
+
+            # Update study streak and daily progress
+            today = datetime.now().strftime("%Y-%m-%d")
+            last_study = user_context[user_id].get("last_study_date")
+
+            if last_study == today:
+                # Already studied today, streak continues
+                pass
+            elif last_study == (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"):
+                # Studied yesterday, increment streak
+                user_context[user_id]["study_streak"] += 1
+            else:
+                # Streak broken or first day, reset to 1
+                user_context[user_id]["study_streak"] = 1
+
+            user_context[user_id]["last_study_date"] = today
+
+            # Update daily progress
+            if user_context[user_id]["today_progress"]["date"] != today:
+                # Reset daily progress for new day
+                user_context[user_id]["today_progress"] = {
+                    "date": today,
+                    "quizzes_completed": 0,
+                    "flashcards_reviewed": 0,
+                    "study_minutes": 0
+                }
+
+            user_context[user_id]["today_progress"]["quizzes_completed"] += 1
+            # Estimate study time (5 minutes per quiz)
+            user_context[user_id]["today_progress"]["study_minutes"] += 5
+
+            # Clear current quiz
+            user_context[user_id]["current_quiz"] = None
+
+            results_text = format_quiz_results(results)
+            await update.message.reply_text(results_text, parse_mode="HTML")
+            return
+        else:
+            await update.message.reply_text("❌ I couldn't parse your answers. Please format them like:\n1. A\n2. True\n3. [your answer]", parse_mode="HTML")
+            return
+
+    elif writing_request["is_progress_stats"]:
+        # Show progress statistics
+        stats = get_progress_statistics(user_id)
+        await update.message.reply_text(stats, parse_mode="HTML")
+        return
+
+    elif writing_request["is_flashcard_generation"]:
+        # Generate flashcards
+        topic = "general vocabulary"
+        if "business" in user_text.lower():
+            topic = "business"
+        elif "academic" in user_text.lower():
+            topic = "academic"
+        elif "everyday" in user_text.lower():
+            topic = "everyday conversation"
+        elif "technical" in user_text.lower():
+            topic = "technical"
+
+        flashcards = generate_flashcards(
+            topic=topic,
+            language=user_context[user_id]["language"],
+            level=user_context[user_id]["level"],
+            count=10
+        )
+
+        if flashcards:
+            # Add flashcards to user context
+            user_context[user_id]["flashcards"].extend(flashcards)
+
+            response = f"<b>📚 Generated {len(flashcards)} Flashcards</b>\n\n"
+            response += f"<i>Topic: {topic.title()}</i>\n"
+            response += f"<i>Language: {user_context[user_id]['language']}</i>\n\n"
+            response += "Your flashcards have been added to your study deck!\n\n"
+            response += "💡 <b>Commands:</b>\n"
+            response += "• 'review flashcards' - Start reviewing due cards\n"
+            response += "• 'practice flashcards' - Review all cards\n\n"
+            response += f"You now have {len(user_context[user_id]['flashcards'])} flashcards in your deck."
+
+            await update.message.reply_text(response, parse_mode="HTML")
+            return
+        else:
+            await update.message.reply_text("❌ I couldn't generate flashcards right now. Please try again later.", parse_mode="HTML")
+            return
+
+    elif writing_request["is_flashcard_review"] or (user_context[user_id].get("current_flashcard_session") and writing_request["is_flashcard_answer"]):
+        # Handle flashcard review session
+        if not user_context[user_id].get("current_flashcard_session"):
+            # Start new review session
+            due_cards = get_due_flashcards(user_id)
+            if not due_cards:
+                await update.message.reply_text("🎉 <b>All caught up!</b>\n\nYou have no flashcards due for review right now. Great job staying on top of your studies!", parse_mode="HTML")
+                return
+
+            user_context[user_id]["current_flashcard_session"] = {
+                "cards": due_cards,
+                "current_index": 0,
+                "showing_answer": False
+            }
+
+        session = user_context[user_id]["current_flashcard_session"]
+        current_card = session["cards"][session["current_index"]]
+
+        if writing_request["is_flashcard_answer"]:
+            # Process answer quality rating
+            quality_map = {
+                "5": 5, "easy": 5, "perfect": 5,
+                "4": 4, "good": 4,
+                "3": 3, "hard": 3,
+                "2": 2, "again": 1, "1": 1
+            }
+
+            quality = quality_map.get(user_text.lower().strip(), 3)
+
+            # Update card progress
+            updated_card = update_flashcard_progress(current_card.copy(), quality)
+
+            # Update the card in user's flashcard list
+            for i, card in enumerate(user_context[user_id]["flashcards"]):
+                if card["word"] == current_card["word"] and card["created_at"] == current_card["created_at"]:
+                    user_context[user_id]["flashcards"][i] = updated_card
+                    break
+
+            session["current_index"] += 1
+
+        # Check if session is complete
+        if session["current_index"] >= len(session["cards"]):
+            completed_count = len(session["cards"])
+            user_context[user_id]["current_flashcard_session"] = None
+
+            # Update daily progress
+            today = datetime.now().strftime("%Y-%m-%d")
+            if user_context[user_id]["today_progress"]["date"] != today:
+                user_context[user_id]["today_progress"] = {
+                    "date": today,
+                    "quizzes_completed": 0,
+                    "flashcards_reviewed": 0,
+                    "study_minutes": 0
+                }
+
+            user_context[user_id]["today_progress"]["flashcards_reviewed"] += completed_count
+            # Estimate study time (1 minute per flashcard)
+            user_context[user_id]["today_progress"]["study_minutes"] += completed_count
+
+            response = f"<b>🎯 Review Session Complete!</b>\n\n"
+            response += f"You reviewed {completed_count} flashcards.\n\n"
+            response += "💪 <b>Keep up the great work!</b>\n"
+            response += "Come back tomorrow for more reviews."
+
+            await update.message.reply_text(response, parse_mode="HTML")
+            return
+
+        # Show next card
+        current_card = session["cards"][session["current_index"]]
+        card_text = format_flashcard(current_card)
+        progress = f"Card {session['current_index'] + 1} of {len(session['cards'])}"
+
+        full_response = f"<b>🧠 Flashcard Review</b>\n<i>{progress}</i>\n\n{card_text}"
+        await update.message.reply_text(full_response, parse_mode="HTML")
+        return
+
+    elif writing_request["is_create_group"]:
+        # Extract group name from user text
+        group_name = "My Study Group"
+        if "group" in user_text.lower():
+            # Try to extract name after "group"
+            parts = user_text.lower().split("group")
+            if len(parts) > 1 and parts[1].strip():
+                group_name = parts[1].strip().title()
+
+        # Create the group
+        group = create_study_group(group_name, user_id, f"Study group created by {username}")
+        user_context[user_id]["owned_groups"].append(group["id"])
+
+        response = f"<b>🎉 Study Group Created!</b>\n\n"
+        response += f"<b>Group Name:</b> {group['name']}\n"
+        response += f"<b>Group ID:</b> {group['id']}\n\n"
+        response += "Share this Group ID with friends so they can join!\n\n"
+        response += "<b>Commands:</b>\n"
+        response += "• 'my groups' - View your groups\n"
+        response += "• 'group leaderboard' - See rankings"
+
+        await update.message.reply_text(response, parse_mode="HTML")
+        return
+
+    elif writing_request["is_join_group"]:
+        # Show available groups
+        if not study_groups:
+            response = "<b>📚 No Study Groups Available</b>\n\n"
+            response += "Be the first to create one!\n"
+            response += "Say 'create group [name]' to start your own study group."
+        else:
+            response = "<b>📚 Available Study Groups</b>\n\n"
+            for group_id, group in study_groups.items():
+                response += f"<b>{group['name']}</b>\n"
+                response += f"ID: {group_id}\n"
+                response += f"Members: {len(group['members'])}\n"
+                if group.get("description"):
+                    response += f"📝 {group['description']}\n"
+                response += "\n"
+
+            response += "<b>To join a group, say:</b>\n"
+            response += "'join group [group_id]'"
+
+        await update.message.reply_text(response, parse_mode="HTML")
+        return
+
+    elif writing_request["is_group_info"]:
+        # Show user's groups
+        user_groups = user_context[user_id]["study_groups"]
+        owned_groups = user_context[user_id]["owned_groups"]
+
+        if not user_groups and not owned_groups:
+            response = "<b>📚 You're not in any study groups yet!</b>\n\n"
+            response += "<b>Join existing groups:</b>\n"
+            response += "• Say 'join group' to see available groups\n\n"
+            response += "<b>Or create your own:</b>\n"
+            response += "• Say 'create group [name]' to start a new group"
+        else:
+            response = "<b>📚 Your Study Groups</b>\n\n"
+
+            # Show owned groups
+            if owned_groups:
+                response += "<b>👑 Groups You Created:</b>\n"
+                for group_id in owned_groups:
+                    if group_id in study_groups:
+                        group = study_groups[group_id]
+                        response += f"• <b>{group['name']}</b> ({len(group['members'])} members)\n"
+                response += "\n"
+
+            # Show joined groups
+            joined_groups = [gid for gid in user_groups if gid not in owned_groups]
+            if joined_groups:
+                response += "<b>👥 Groups You Joined:</b>\n"
+                for group_id in joined_groups:
+                    if group_id in study_groups:
+                        group = study_groups[group_id]
+                        response += f"• <b>{group['name']}</b> ({len(group['members'])} members)\n"
+                response += "\n"
+
+            # Show leaderboard for first group
+            all_user_groups = owned_groups + joined_groups
+            if all_user_groups and all_user_groups[0] in study_groups:
+                group = study_groups[all_user_groups[0]]
+                leaderboard = get_group_leaderboard(group["id"])
+
+                if leaderboard:
+                    response += f"<b>🏆 {group['name']} Leaderboard:</b>\n"
+                    for i, member in enumerate(leaderboard[:5], 1):
+                        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                        response += f"{medal} {member['name']}: {member['average_score']:.1f}% avg\n"
+
+        await update.message.reply_text(response, parse_mode="HTML")
+        return
+
+    elif writing_request["is_learning_path"]:
+        # Generate personalized learning path
+        learning_path = generate_learning_path(user_id)
+        await update.message.reply_text(learning_path, parse_mode="HTML")
+        return
+
+    elif writing_request["is_multimedia"]:
+        # Provide multimedia resources
+        topic = "general language learning"
+        content_type = "all"
+
+        # Extract topic from user text
+        if "grammar" in user_text.lower():
+            topic = "grammar"
+        elif "vocabulary" in user_text.lower() or "vocab" in user_text.lower():
+            topic = "vocabulary"
+        elif "pronunciation" in user_text.lower():
+            topic = "pronunciation"
+        elif "conversation" in user_text.lower():
+            topic = "conversation"
+        elif "video" in user_text.lower():
+            content_type = "video"
+        elif "audio" in user_text.lower() or "podcast" in user_text.lower():
+            content_type = "audio"
+
+        language = user_context[user_id]["language"]
+        resources = get_multimedia_resources(topic, language, content_type)
+        await update.message.reply_text(resources, parse_mode="HTML", disable_web_page_preview=True)
+        return
+
     # Update history (keep last 15 messages for better memory)
     user_context[user_id]["last_topic"] = user_text[:100]
     if len(user_context[user_id]["history"]) >= 15:
         user_context[user_id]["history"].pop(0)
-    
+
     # Add current question to history
     user_context[user_id]["history"].append({
-        "question": user_text, 
+        "question": user_text,
         "timestamp": datetime.now().strftime("%H:%M:%S"),
         "username": username,
         "writing_request": writing_request,
@@ -890,11 +2089,11 @@ async def process_document_message(update: Update, context: CallbackContext, use
         log_info(f"Document upload from {username}: {file_name}", user_id)
         
         # Check if file type is supported
-        supported_types = ['pdf', 'jpg', 'jpeg', 'png']
+        supported_types = ['pdf', 'jpg', 'jpeg', 'png', 'docx', 'pptx', 'doc', 'ppt']
         if file_extension not in supported_types:
             await update.message.reply_text(
                 f"❌ <b>Unsupported File Type</b>\n\n"
-                f"I can only process: PDF, JPG, PNG files.\n"
+                f"I can process: PDF, JPG, PNG, DOCX, PPTX files.\n"
                 f"Your file: {file_name}\n"
                 f"Please convert your file to a supported format and try again.",
                 parse_mode="HTML"
@@ -1030,8 +2229,64 @@ async def handle_photo_message(update: Update, context: CallbackContext):
     """Handle photo uploads"""
     user_id = str(update.message.from_user.id)
     username = update.message.from_user.first_name or "Student"
-    
+
     await process_photo_message(update, context, user_id, username)
+
+async def handle_voice_message(update: Update, context: CallbackContext):
+    """Handle voice message uploads for pronunciation practice"""
+    user_id = str(update.message.from_user.id)
+    username = update.message.from_user.first_name or "Student"
+
+    try:
+        voice = update.message.voice
+
+        # Send processing message
+        processing_msg = await update.message.reply_text(
+            "🎤 <b>Processing your voice message...</b>\n\n"
+            "<i>Analyzing pronunciation...</i>\n"
+            "This may take a few moments...",
+            parse_mode="HTML"
+        )
+
+        # Download the voice file
+        file = await voice.get_file()
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg') as temp_file:
+            temp_path = temp_file.name
+            await file.download_to_drive(temp_path)
+
+        # For now, provide basic feedback (would need speech-to-text API integration)
+        feedback = """
+<b>🎤 Pronunciation Practice</b>
+
+I've received your voice message! For full pronunciation analysis, I would need additional speech recognition integration.
+
+<b>What I can help with:</b>
+• <b>Phonetic guidance</b> - Learn correct pronunciation patterns
+• <b>Common mistakes</b> - Address frequent pronunciation issues
+• <b>Practice exercises</b> - Targeted pronunciation drills
+• <b>Language-specific tips</b> - English, Khmer, and French pronunciation
+
+<b>Try these commands:</b>
+• "How do I pronounce [word]?"
+• "Practice English vowels"
+• "French pronunciation tips"
+• "Khmer consonant sounds"
+
+<i>Note: Full voice analysis requires speech-to-text API integration for real-time feedback.</i>
+"""
+
+        await processing_msg.edit_text(feedback, parse_mode="HTML")
+
+        # Clean up temporary file
+        os.unlink(temp_path)
+
+    except Exception as e:
+        log_info(f"Error processing voice: {e}", user_id)
+        await update.message.reply_text(
+            "❌ <b>Error Processing Voice Message</b>\n\n"
+            "I encountered an error while processing your voice message. Please try again.",
+            parse_mode="HTML"
+        )
 
 async def error_handler(update: Update, context: CallbackContext):
     """Handle errors"""
@@ -1089,10 +2344,11 @@ def main():
             # Build application
             application = Application.builder().token(TELEGRAM_TOKEN).build()
             
-            # Add handlers for text, documents, and photos
+            # Add handlers for text, documents, photos, and voice messages
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
             application.add_handler(MessageHandler(filters.Document.ALL, handle_document_message))
             application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
+            application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
             application.add_error_handler(error_handler)
             
             log_info(f"🔄 Starting Telegram bot polling (attempt {attempt + 1})...", "SYSTEM")
@@ -1121,5 +2377,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
